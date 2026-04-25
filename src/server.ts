@@ -55,6 +55,7 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
       textDocumentSync: TextDocumentSyncKind.Incremental,
       hoverProvider: true,
       definitionProvider: true,
+      referencesProvider: true,
       documentSymbolProvider: true,
       completionProvider: {
         triggerCharacters: [':', '.'],
@@ -150,6 +151,24 @@ connection.onDefinition((params): Location | Location[] | null => {
   if (!symbol) return null;
 
   return symbolLocation(symbol);
+});
+
+connection.onReferences((params): Location[] => {
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc) return [];
+
+  const word = wordAtPosition(doc, params.position);
+  if (!word) return [];
+
+  const result = projectIndex.resolveSymbol(
+    params.textDocument.uri,
+    word,
+    params.position,
+  );
+
+  if (!result.selected) return [];
+
+  return projectIndex.referencesTo(result.selected);
 });
 
 connection.onCompletion((params) => {

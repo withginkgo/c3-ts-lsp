@@ -293,6 +293,165 @@ test('ProjectIndex resolves local declarations by cursor position', () => {
   assert.equal(symbol?.signature, 'HttpResponse res;');
 });
 
+test('ProjectIndex resolves struct members by receiver type', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'struct HttpResponse {',
+    '    String body;',
+    '}',
+    'fn void use() {',
+    '    HttpResponse res;',
+    '    res.body;',
+    '}',
+    '',
+  ].join('\n');
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+
+  index.upsert(parseSource(uri, source));
+
+  const result = index.resolveSymbol(
+    uri,
+    'body',
+    doc.positionAt(source.lastIndexOf('body')),
+  );
+
+  assert.equal(result.reason, 'resolved');
+  assert.equal(result.selected?.signature, 'String body;');
+});
+
+test('ProjectIndex resolves struct members through pointer-like receiver types', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'struct HttpResponse {',
+    '    String body;',
+    '}',
+    'fn void use(HttpResponse* res) {',
+    '    res.body;',
+    '}',
+    '',
+  ].join('\n');
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+
+  index.upsert(parseSource(uri, source));
+
+  const result = index.resolveSymbol(
+    uri,
+    'body',
+    doc.positionAt(source.lastIndexOf('body')),
+  );
+
+  assert.equal(result.reason, 'resolved');
+  assert.equal(result.selected?.signature, 'String body;');
+});
+
+test('ProjectIndex exposes visible scoped symbols at a position', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'fn void use(String path) {',
+    '    int count;',
+    '    count;',
+    '}',
+    '',
+  ].join('\n');
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+
+  index.upsert(parseSource(uri, source));
+
+  const symbols = index.visibleSymbolsAt(
+    uri,
+    doc.positionAt(source.indexOf('count;')),
+  );
+
+  assert.deepEqual(
+    symbols.slice(0, 2).map((symbol) => [symbol.name, symbol.signature]),
+    [
+      ['count', 'int count;'],
+      ['path', 'String path'],
+    ],
+  );
+});
+
+test('ProjectIndex resolves local references from syntax nodes', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'fn void use() {',
+    '    int count;',
+    '    count;',
+    '}',
+    '',
+  ].join('\n');
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+
+  index.upsert(parseSource(uri, source));
+
+  const symbol = index.resolveSymbol(
+    uri,
+    'count',
+    doc.positionAt(source.lastIndexOf('count')),
+  ).selected;
+
+  assert.deepEqual(
+    symbol ? index.referencesTo(symbol).map((location) => location.range) : [],
+    [
+      {
+        start: { line: 2, character: 8 },
+        end: { line: 2, character: 13 },
+      },
+      {
+        start: { line: 3, character: 4 },
+        end: { line: 3, character: 9 },
+      },
+    ],
+  );
+});
+
+test('ProjectIndex resolves member references from syntax nodes', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'struct HttpResponse {',
+    '    String body;',
+    '}',
+    'fn void use() {',
+    '    HttpResponse res;',
+    '    res.body;',
+    '}',
+    '',
+  ].join('\n');
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+
+  index.upsert(parseSource(uri, source));
+
+  const symbol = index.resolveSymbol(
+    uri,
+    'body',
+    doc.positionAt(source.lastIndexOf('body')),
+  ).selected;
+
+  assert.deepEqual(
+    symbol ? index.referencesTo(symbol).map((location) => location.range) : [],
+    [
+      {
+        start: { line: 2, character: 11 },
+        end: { line: 2, character: 15 },
+      },
+      {
+        start: { line: 6, character: 8 },
+        end: { line: 6, character: 12 },
+      },
+    ],
+  );
+});
+
 test('ProjectIndex does not resolve parameters from unrelated scopes by position', () => {
   const index = new ProjectIndex();
   const uri = 'file:///workspace/app.c3';

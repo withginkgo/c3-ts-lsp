@@ -50,6 +50,70 @@ test('completionItems includes symbols from the current module', () => {
   );
 });
 
+test('completionItems includes visible scoped symbols', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'fn void use(String path) {',
+    '    int count;',
+    '    ',
+    '}',
+    '',
+  ].join('\n');
+  const parsed = parseSource(uri, source);
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+
+  index.upsert(parsed);
+
+  const labels = completionItems(
+    index,
+    doc,
+    parsed,
+    doc.positionAt(
+      source.indexOf(
+        '    ',
+        source.indexOf('int count;') + 'int count;'.length,
+      ) + 4,
+    ),
+  ).map((item) => item.label);
+
+  assert.equal(labels.includes('path'), true);
+  assert.equal(labels.includes('count'), true);
+});
+
+test('completionItems returns struct members after member access', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'struct HttpResponse {',
+    '    String body;',
+    '}',
+    'fn void use() {',
+    '    HttpResponse res;',
+    '    res.body;',
+    '}',
+    '',
+  ].join('\n');
+  const parsed = parseSource(uri, source);
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+
+  index.upsert(parsed);
+
+  const items = completionItems(
+    index,
+    doc,
+    parsed,
+    doc.positionAt(source.indexOf('res.') + 'res.'.length),
+  );
+
+  assert.deepEqual(
+    items.map((item) => [item.label, item.kind, item.detail]),
+    [['body', CompletionItemKind.Field, 'String body;']],
+  );
+});
+
 test('completionItems returns imported module members after a module prefix', () => {
   const index = new ProjectIndex();
   const appUri = 'file:///workspace/app.c3';

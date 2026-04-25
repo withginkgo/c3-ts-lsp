@@ -71,6 +71,55 @@ test('semanticDiagnostics reports unresolved expression symbols', () => {
   );
 });
 
+test('semanticDiagnostics reports unresolved members', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'struct HttpResponse {',
+      '    String body;',
+      '}',
+      'fn void use() {',
+      '    HttpResponse res;',
+      '    res.missing;',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(
+    semanticDiagnostics(index, parsed).map((diagnostic) => diagnostic.message),
+    ["Unresolved symbol 'missing'"],
+  );
+});
+
+test('semanticDiagnostics accepts resolved members', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'struct HttpResponse {',
+      '    String body;',
+      '}',
+      'fn void use() {',
+      '    HttpResponse res;',
+      '    res.body;',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(semanticDiagnostics(index, parsed), []);
+});
+
 test('semanticDiagnostics reports ambiguous expression symbols', () => {
   const index = new ProjectIndex();
   const appUri = 'file:///workspace/app.c3';

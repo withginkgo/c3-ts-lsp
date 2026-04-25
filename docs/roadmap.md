@@ -18,17 +18,20 @@ The server currently provides a working prototype:
 - Basic hover, definition, document symbols, and completions.
 - Position-aware resolver with import, relative module, module alias,
   visibility, ambiguity, and unresolved-symbol handling.
+- Scope and member-aware hover, definition, completion, diagnostics, and
+  references for parameters, locals, and struct fields.
 - Semantic diagnostics for unresolved imports, unresolved module aliases,
-  unresolved expression symbols, and ambiguous expression symbols.
+  unresolved expression symbols, unresolved members, and ambiguous expression
+  symbols.
 - Syntax diagnostics from tree-sitter parse errors.
 - Small debug scripts for parser tree and symbol inspection.
 - A Node test runner setup covering parser extraction, project indexing, and
   completion behavior.
 
 The implementation is still intentionally lightweight. It has project/module
-resolution and basic scoped local lookup, but it does not yet model member
-declarations, overloads, type relationships, references, rename, or editor
-packaging.
+resolution, basic scoped local lookup, and simple member type analysis, but it
+does not yet model overload selection, broad type relationships, rename, or
+editor packaging.
 
 ## Target Architecture
 
@@ -113,6 +116,8 @@ Exit criteria:
 ### Phase 3: Scope And Type Analysis
 
 Goal: make references, hover, and completions context-aware.
+
+Status: partially completed in Unreleased.
 
 - Build lexical scopes for modules, functions, blocks, parameters, locals, and
   members.

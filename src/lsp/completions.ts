@@ -17,6 +17,17 @@ export function completionItems(
 ): CompletionItem[] {
   if (!doc || !current) return keywordCompletions();
 
+  const memberAccess = memberAccessBeforeCursor(doc, position);
+
+  if (memberAccess) {
+    return memberCompletions(
+      index,
+      current,
+      memberAccess.receiver,
+      memberAccess.position,
+    );
+  }
+
   const prefix = modulePrefixBeforeCursor(doc, position);
 
   if (prefix) {
@@ -24,7 +35,7 @@ export function completionItems(
   }
 
   const symbolItems: CompletionItem[] = index
-    .visibleSymbols(current)
+    .visibleSymbolsAt(current.uri, position)
     .map((symbol) => ({
       label: symbol.name,
       kind: toCompletionKind(symbol.kind),
@@ -32,6 +43,23 @@ export function completionItems(
     }));
 
   return [...keywordCompletions(), ...symbolItems];
+}
+
+function memberAccessBeforeCursor(
+  doc: TextDocument,
+  position: Position,
+): { receiver: string; position: Position } | null {
+  const text = doc.getText();
+  const offset = doc.offsetAt(position);
+  const before = text.slice(0, offset);
+  const match = before.match(/([A-Za-z_$@][A-Za-z0-9_$@]*)\.$/);
+
+  if (!match || match.index == null) return null;
+
+  return {
+    receiver: match[1],
+    position: doc.positionAt(match.index),
+  };
 }
 
 function modulePrefixBeforeCursor(
@@ -82,6 +110,21 @@ function keywordCompletions(): CompletionItem[] {
   }));
 }
 
+function memberCompletions(
+  index: ProjectIndex,
+  current: ParsedDocument,
+  receiver: string,
+  position: Position,
+): CompletionItem[] {
+  return index
+    .memberSymbolsForReceiver(current.uri, receiver, position)
+    .map((symbol) => ({
+      label: symbol.name,
+      kind: toCompletionKind(symbol.kind),
+      detail: symbol.signature,
+    }));
+}
+
 function moduleMemberCompletions(
   index: ProjectIndex,
   current: ParsedDocument,
@@ -104,6 +147,10 @@ function toCompletionKind(kind: SymbolKind): CompletionItemKind {
   switch (kind) {
     case SymbolKind.Function:
       return CompletionItemKind.Function;
+    case SymbolKind.Method:
+      return CompletionItemKind.Method;
+    case SymbolKind.Field:
+      return CompletionItemKind.Field;
     case SymbolKind.Struct:
       return CompletionItemKind.Struct;
     case SymbolKind.Enum:

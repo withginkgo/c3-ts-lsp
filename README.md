@@ -3,6 +3,7 @@
 This project is a Node-based language server prototype for C3. It uses
 `tree-sitter-c3` to parse C3 source files and `vscode-languageserver` to expose
 document symbols, hover, definition, and completion support over LSP.
+It also exposes basic diagnostics and references.
 
 ## Features
 
@@ -11,11 +12,13 @@ document symbols, hover, definition, and completion support over LSP.
 - Document symbols for top-level C3 declarations.
 - Nested document symbols for declaration members, enum values, and parameters.
 - Hover and definition lookup across files in the same project, including
-  imported modules, relative module paths, and module aliases.
+  imported modules, relative module paths, module aliases, and struct members.
 - Module-aware completions for direct, imported, relative, and aliased module
   paths.
+- Scope-aware completions for parameters, locals, and struct members.
 - Syntax and basic semantic diagnostics from tree-sitter parse errors, missing
   imports, unresolved symbols, and ambiguous symbols.
+- References for declarations, scoped locals, and resolved member accesses.
 
 ## Project Structure
 

@@ -1,8 +1,10 @@
 import {
+  Location,
+  Range,
   SymbolKind,
   type Position,
-  type Range,
 } from 'vscode-languageserver/node.js';
+import type { SyntaxNode } from 'tree-sitter';
 
 import type {
   C3Symbol,
@@ -87,6 +89,35 @@ export class ProjectIndex {
     return symbols;
   }
 
+  visibleSymbolsAt(currentUri: string, position: Position): C3Symbol[] {
+    const current = this.parsedByUri.get(currentUri);
+    if (!current) return [];
+
+    return [
+      ...findScopedSymbolsAt(current.scopedSymbols, position),
+      ...this.visibleSymbols(current),
+    ];
+  }
+
+  memberSymbolsForReceiver(
+    currentUri: string,
+    receiverRef: string,
+    position: Position,
+  ): C3Symbol[] {
+    const current = this.parsedByUri.get(currentUri);
+    if (!current) return [];
+
+    const receiver = this.resolveSymbol(
+      currentUri,
+      receiverRef,
+      position,
+    ).selected;
+    const typeName = receiver?.returnType;
+    if (!typeName) return [];
+
+    return this.membersForTypeName(current, typeName, position);
+  }
+
   findSymbol(currentUri: string, ref: string): C3Symbol | undefined {
     const current = this.parsedByUri.get(currentUri);
     if (!current) return undefined;
@@ -122,6 +153,16 @@ export class ProjectIndex {
     const current = this.parsedByUri.get(currentUri);
     if (!current) return { candidates: [], reason: 'not_found' };
 
+    const memberCandidates = this.memberSymbolCandidatesAt(
+      current,
+      ref,
+      position,
+    );
+
+    if (memberCandidates) {
+      return resultFromCandidates(memberCandidates);
+    }
+
     if (ref.includes('::')) {
       return resultFromCandidates(this.qualifiedSymbolCandidates(current, ref));
     }
@@ -148,6 +189,28 @@ export class ProjectIndex {
     position: Position,
   ): C3Symbol | undefined {
     return this.resolveSymbol(currentUri, ref, position).selected;
+  }
+
+  referencesTo(target: C3Symbol): Location[] {
+    const locations: Location[] = [];
+
+    for (const parsed of this.parsedByUri.values()) {
+      for (const symbol of declaredSymbols(parsed)) {
+        if (sameSymbol(symbol, target)) {
+          locations.push(symbolLocation(symbol));
+        }
+      }
+
+      for (const ref of referenceNodes(parsed.tree.rootNode)) {
+        this.addReferenceLocation(parsed, ref, target, locations);
+      }
+
+      for (const ref of memberReferenceNodes(parsed.tree.rootNode)) {
+        this.addReferenceLocation(parsed, ref, target, locations);
+      }
+    }
+
+    return uniqueLocations(locations).sort(compareLocations);
   }
 
   private visibleModuleSymbolCandidates(
@@ -291,6 +354,86 @@ export class ProjectIndex {
     return [];
   }
 
+  private memberSymbolCandidatesAt(
+    current: ParsedDocument,
+    ref: string,
+    position: Position,
+  ): C3Symbol[] | undefined {
+    const fieldExpr = fieldExpressionAt(current, ref, position);
+    if (!fieldExpr) return undefined;
+
+    const argument = fieldExpr.childForFieldName('argument');
+    if (!argument) return [];
+
+    const typeName = this.expressionTypeName(current, argument, position);
+    if (!typeName) return [];
+
+    return this.membersForTypeName(current, typeName, position).filter(
+      (member) => member.name === ref,
+    );
+  }
+
+  private expressionTypeName(
+    current: ParsedDocument,
+    expression: SyntaxNode,
+    position: Position,
+  ): string | undefined {
+    if (expression.type === 'ident_expr') {
+      const resolved = this.resolveSymbol(
+        current.uri,
+        expression.text,
+        rangeFromNode(expression).start,
+      ).selected;
+
+      return resolved?.returnType ?? symbolTypeName(resolved);
+    }
+
+    if (expression.type === 'field_expr') {
+      const field = expression.childForFieldName('field');
+      if (!field) return undefined;
+
+      const member = this.memberSymbolCandidatesAt(
+        current,
+        field.text,
+        rangeFromNode(field).start,
+      )?.[0];
+
+      return member?.returnType;
+    }
+
+    return undefined;
+  }
+
+  private membersForTypeName(
+    current: ParsedDocument,
+    typeName: string,
+    position: Position,
+  ): C3Symbol[] {
+    const normalizedType = normalizeTypeName(typeName);
+    if (!normalizedType) return [];
+
+    const typeSymbol = this.resolveTypeSymbol(
+      current,
+      normalizedType,
+      position,
+    );
+    return typeSymbol?.children ?? [];
+  }
+
+  private resolveTypeSymbol(
+    current: ParsedDocument,
+    typeName: string,
+    position: Position,
+  ): C3Symbol | undefined {
+    const candidates = typeName.includes('::')
+      ? this.qualifiedSymbolCandidates(current, typeName)
+      : this.visibleModuleSymbolCandidates(current, typeName);
+
+    return resultFromCandidates(
+      candidates.filter((symbol) => isTypeSymbol(symbol)),
+    ).selected;
+  }
+
   private rebuildAffectedModules(
     ...moduleNames: Array<string | undefined>
   ): void {
@@ -347,6 +490,25 @@ export class ProjectIndex {
       addSymbolRecursive(mod.allSymbols, sym);
     }
   }
+
+  private addReferenceLocation(
+    parsed: ParsedDocument,
+    ref: SyntaxNode,
+    target: C3Symbol,
+    locations: Location[],
+  ): void {
+    if (ref.text !== target.name) return;
+
+    const resolved = this.resolveSymbol(
+      parsed.uri,
+      ref.text,
+      rangeFromNode(ref).start,
+    ).selected;
+
+    if (resolved && sameSymbol(resolved, target)) {
+      locations.push(Location.create(parsed.uri, rangeFromNode(ref)));
+    }
+  }
 }
 
 function addSymbolRecursive(
@@ -360,6 +522,20 @@ function addSymbolRecursive(
   for (const child of symbol.children) {
     addSymbolRecursive(symbols, child);
   }
+}
+
+function declaredSymbols(parsed: ParsedDocument): C3Symbol[] {
+  return [
+    ...flattenSymbols(parsed.symbols),
+    ...flattenSymbols(parsed.scopedSymbols),
+  ];
+}
+
+function flattenSymbols(symbols: C3Symbol[]): C3Symbol[] {
+  return symbols.flatMap((symbol) => [
+    symbol,
+    ...flattenSymbols(symbol.children),
+  ]);
 }
 
 function findDeclaredSymbolAt(
@@ -387,11 +563,20 @@ function findScopedSymbolAt(
   ref: string,
   position: Position,
 ): C3Symbol | undefined {
-  const candidates = symbols
-    .filter((symbol) => symbol.name === ref)
-    .filter((symbol) => scopedSymbolVisibleAt(symbol, position));
+  const candidates = findScopedSymbolsAt(symbols, position).filter(
+    (symbol) => symbol.name === ref,
+  );
 
   return candidates.sort((a, b) => compareScopedCandidates(a, b, position))[0];
+}
+
+function findScopedSymbolsAt(
+  symbols: C3Symbol[],
+  position: Position,
+): C3Symbol[] {
+  return symbols
+    .filter((symbol) => scopedSymbolVisibleAt(symbol, position))
+    .sort((a, b) => compareScopedCandidates(a, b, position));
 }
 
 function scopedSymbolVisibleAt(symbol: C3Symbol, position: Position): boolean {
@@ -487,4 +672,159 @@ function compareSymbols(a: C3Symbol, b: C3Symbol): number {
     a.uri.localeCompare(b.uri) ||
     comparePositions(a.selectionRange.start, b.selectionRange.start)
   );
+}
+
+function symbolLocation(symbol: C3Symbol): Location {
+  return Location.create(symbol.uri, symbol.selectionRange);
+}
+
+function sameSymbol(a: C3Symbol, b: C3Symbol): boolean {
+  return a.uri === b.uri && sameRange(a.selectionRange, b.selectionRange);
+}
+
+function sameRange(a: Range, b: Range): boolean {
+  return (
+    comparePositions(a.start, b.start) === 0 &&
+    comparePositions(a.end, b.end) === 0
+  );
+}
+
+function uniqueLocations(locations: Location[]): Location[] {
+  const seen = new Set<string>();
+  const unique: Location[] = [];
+
+  for (const location of locations) {
+    const key = [
+      location.uri,
+      location.range.start.line,
+      location.range.start.character,
+      location.range.end.line,
+      location.range.end.character,
+    ].join(':');
+
+    if (seen.has(key)) continue;
+
+    seen.add(key);
+    unique.push(location);
+  }
+
+  return unique;
+}
+
+function compareLocations(a: Location, b: Location): number {
+  return (
+    a.uri.localeCompare(b.uri) || comparePositions(a.range.start, b.range.start)
+  );
+}
+
+function fieldExpressionAt(
+  parsed: ParsedDocument,
+  ref: string,
+  position: Position,
+): SyntaxNode | undefined {
+  const node = parsed.tree.rootNode.descendantForPosition({
+    row: position.line,
+    column: position.character,
+  });
+  const fieldNode = ancestorOfType(node, 'access_ident');
+
+  if (!fieldNode || fieldNode.text !== ref) return undefined;
+
+  const fieldExpr = ancestorOfType(fieldNode, 'field_expr');
+  if (!fieldExpr) return undefined;
+
+  const field = fieldExpr.childForFieldName('field');
+  if (
+    !field ||
+    field.startIndex !== fieldNode.startIndex ||
+    field.endIndex !== fieldNode.endIndex
+  ) {
+    return undefined;
+  }
+
+  return fieldExpr;
+}
+
+function ancestorOfType(
+  node: SyntaxNode | null,
+  type: string,
+): SyntaxNode | undefined {
+  let current = node;
+
+  while (current) {
+    if (current.type === type) return current;
+    current = current.parent;
+  }
+
+  return undefined;
+}
+
+function rangeFromNode(node: SyntaxNode): Range {
+  return Range.create(
+    node.startPosition.row,
+    node.startPosition.column,
+    node.endPosition.row,
+    node.endPosition.column,
+  );
+}
+
+function normalizeTypeName(typeName: string): string {
+  return typeName
+    .replace(/\[[^\]]*\]/g, '')
+    .replace(/[*!?~]+/g, '')
+    .trim();
+}
+
+function symbolTypeName(symbol: C3Symbol | undefined): string | undefined {
+  if (!symbol) return undefined;
+
+  if (isTypeSymbol(symbol)) {
+    return symbol.name;
+  }
+
+  return undefined;
+}
+
+function isTypeSymbol(symbol: C3Symbol): boolean {
+  return (
+    symbol.kind === SymbolKind.Struct ||
+    symbol.kind === SymbolKind.Enum ||
+    symbol.kind === SymbolKind.Interface
+  );
+}
+
+function referenceNodes(root: SyntaxNode): SyntaxNode[] {
+  const refs: SyntaxNode[] = [];
+
+  function visit(node: SyntaxNode): void {
+    if (node.type === 'ident_expr') {
+      refs.push(node);
+      return;
+    }
+
+    for (const child of node.namedChildren) {
+      visit(child);
+    }
+  }
+
+  visit(root);
+  return refs;
+}
+
+function memberReferenceNodes(root: SyntaxNode): SyntaxNode[] {
+  const refs: SyntaxNode[] = [];
+
+  function visit(node: SyntaxNode): void {
+    if (node.type === 'field_expr') {
+      const field = node.childForFieldName('field');
+      if (field) refs.push(field);
+    }
+
+    for (const child of node.namedChildren) {
+      visit(child);
+    }
+  }
+
+  visit(root);
+  return refs;
 }

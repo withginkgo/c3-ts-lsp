@@ -15,6 +15,11 @@ All notable project changes are recorded here.
   module-prefix completions.
 - Added semantic diagnostics for unresolved imports, unresolved module alias
   targets, unresolved expression symbols, and ambiguous expression symbols.
+- Added member access resolution for struct members, including pointer-like
+  receiver types.
+- Added local, parameter, and member-aware completions.
+- Added an LSP references provider backed by syntax-tree references and symbol
+  resolution.
 
 ### Changed
 
@@ -25,6 +30,8 @@ All notable project changes are recorded here.
   unrelated modules and private imported declarations.
 - Made project index updates rebuild only affected modules during single-file
   changes.
+- Made hover, definition, diagnostics, and references distinguish struct
+  members from unrelated top-level symbols.
 
 ## [0.2.0] - 2026-04-25
 
