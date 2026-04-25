@@ -11,7 +11,7 @@ type WorkspaceScanReporter = {
 };
 
 const c3Extensions = new Set(['.c3', '.c3i', '.c3t']);
-const skippedDirectories = new Set([
+export const skippedDirectories = new Set([
   '.git',
   'node_modules',
   'dist',
@@ -81,6 +81,6 @@ export function collectC3Files(root: string): string[] {
   return result;
 }
 
-function isC3SourceFile(file: string): boolean {
+export function isC3SourceFile(file: string): boolean {
   return c3Extensions.has(path.extname(file));
 }

@@ -9,6 +9,7 @@ The server currently provides a working prototype:
 
 - Tree-sitter based parsing for C3 source text.
 - Workspace scanning for `.c3`, `.c3i`, and `.c3t` files.
+- Workspace file watching for C3 source changes after initialization.
 - A module index keyed by `module` declarations.
 - Top-level symbol extraction for all C3 declaration nodes currently exposed by
   `tree-sitter-c3`.

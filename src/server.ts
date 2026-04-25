@@ -24,6 +24,7 @@ import { parseSource } from './parser/c3-parser.js';
 import { ProjectIndex } from './project/project-index.js';
 import type { C3Symbol, ResolveResult } from './shared/types.js';
 import { scanWorkspace } from './workspace/scan.js';
+import { watchWorkspace, type WorkspaceWatcher } from './workspace/watch.js';
 
 const hasTransportArg = process.argv.slice(2).some((arg) => {
   return (
@@ -43,6 +44,7 @@ const documents = new TextDocuments(TextDocument);
 const projectIndex = new ProjectIndex();
 
 let workspaceRoot: string | null = null;
+let workspaceWatcher: WorkspaceWatcher | null = null;
 
 connection.onInitialize((params: InitializeParams): InitializeResult => {
   workspaceRoot = resolveWorkspaceRoot(params);
@@ -71,6 +73,18 @@ connection.onInitialized(() => {
     log: (message) => connection.console.log(message),
     error: (message) => connection.console.error(message),
   });
+
+  workspaceWatcher = watchWorkspace(
+    workspaceRoot,
+    {
+      change: (uri) => indexDocumentFromDisk(uri),
+      delete: (uri) => removeIndexedDocument(uri),
+    },
+    {
+      log: (message) => connection.console.log(message),
+      error: (message) => connection.console.error(message),
+    },
+  );
 });
 
 documents.onDidOpen((event) => {
@@ -83,6 +97,11 @@ documents.onDidChangeContent((event) => {
 
 documents.onDidClose((event) => {
   restoreClosedDocumentFromDisk(event.document.uri);
+});
+
+connection.onShutdown(() => {
+  workspaceWatcher?.close();
+  workspaceWatcher = null;
 });
 
 connection.onDocumentSymbol((params) => {
@@ -149,6 +168,17 @@ function parseAndIndexDocument(doc: TextDocument): void {
 }
 
 function restoreClosedDocumentFromDisk(uri: string): void {
+  indexDocumentFromDisk(uri);
+}
+
+function indexDocumentFromDisk(uri: string): void {
+  const openDocument = documents.get(uri);
+
+  if (openDocument) {
+    parseAndIndexDocument(openDocument);
+    return;
+  }
+
   const filePath = filePathFromUri(uri);
 
   if (filePath && workspaceRoot && isPathInside(filePath, workspaceRoot)) {
@@ -158,17 +188,25 @@ function restoreClosedDocumentFromDisk(uri: string): void {
         const parsed = parseSource(uri, source);
         projectIndex.upsert(parsed);
         publishDiagnostics(parsed);
+        connection.console.log(
+          `indexed ${uri}: module=${parsed.moduleName}, symbols=${parsed.symbols.length}`,
+        );
         return;
       }
     } catch (err) {
       connection.console.error(
-        `failed to re-index closed document ${uri}: ${String(err)}`,
+        `failed to index document ${uri}: ${String(err)}`,
       );
     }
   }
 
+  removeIndexedDocument(uri);
+}
+
+function removeIndexedDocument(uri: string): void {
   projectIndex.remove(uri);
   connection.sendDiagnostics({ uri, diagnostics: [] });
+  connection.console.log(`removed ${uri} from index`);
 }
 
 function publishDiagnostics(parsed: ReturnType<typeof parseSource>): void {

@@ -9,6 +9,8 @@ All notable project changes are recorded here.
 - Added a structured resolver result with selected symbol, candidates, and
   resolution status for position-aware symbol lookup.
 - Added hover and definition handling for ambiguous symbol candidates.
+- Added workspace file watching so changed, created, and deleted C3 source
+  files update the project index without restarting the server.
 
 ### Changed
 
