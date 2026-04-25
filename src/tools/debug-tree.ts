@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
-import { parseSource } from './c3-parser.js';
+import { parseSource } from '../parser/c3-parser.js';
 
 const file = process.argv[2] ?? 'testdata/simple/main.c3';
 const source = fs.readFileSync(file, 'utf8');

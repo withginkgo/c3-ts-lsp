@@ -40,7 +40,7 @@ different name during the initial edits.
 
 Fix:
 
-Use the normalized file name `src/debug-symbols.ts` and keep
+Use the normalized file name `src/tools/debug-symbols.ts` and keep
 `npm run debug:symbols` aligned with it.
 
 ### LSP startup crash

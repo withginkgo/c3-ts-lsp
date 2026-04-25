@@ -6,8 +6,8 @@ import {
 } from 'vscode-languageserver/node.js';
 import type { TextDocument } from 'vscode-languageserver-textdocument';
 
-import type { ProjectIndex } from './project-index.js';
-import type { ParsedDocument } from './types.js';
+import type { ProjectIndex } from '../project/project-index.js';
+import type { ParsedDocument } from '../shared/types.js';
 
 export function completionItems(
   index: ProjectIndex,

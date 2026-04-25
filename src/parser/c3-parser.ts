@@ -3,7 +3,7 @@ import C3 from 'tree-sitter-c3/bindings/node/index.js';
 import { Position, Range, SymbolKind } from 'vscode-languageserver/node.js';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 
-import type { C3Symbol, ParsedDocument } from './types.js';
+import type { C3Symbol, ParsedDocument } from '../shared/types.js';
 
 const parser = new Parser();
 parser.setLanguage(C3 as Parser.Language);

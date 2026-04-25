@@ -18,11 +18,11 @@ import {
 } from 'vscode-languageserver/node.js';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 
-import { parseSource } from './c3-parser.js';
-import { completionItems } from './completions.js';
-import { wordAtPosition } from './document-refs.js';
-import { ProjectIndex } from './project-index.js';
-import { scanWorkspace } from './workspace.js';
+import { completionItems } from './lsp/completions.js';
+import { wordAtPosition } from './lsp/document-refs.js';
+import { parseSource } from './parser/c3-parser.js';
+import { ProjectIndex } from './project/project-index.js';
+import { scanWorkspace } from './workspace/scan.js';
 
 const hasTransportArg = process.argv.slice(2).some((arg) => {
   return (

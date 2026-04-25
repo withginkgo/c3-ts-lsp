@@ -14,13 +14,15 @@ document symbols, hover, definition, and completion support over LSP.
 ## Project Structure
 
 ```text
-src/server.ts         LSP entrypoint and request wiring
-src/c3-parser.ts      Tree-sitter parsing and symbol extraction
-src/project-index.ts  Module index and symbol resolution
-src/completions.ts    Completion item generation
-src/document-refs.ts  Identifier/reference extraction from documents
-src/workspace.ts      Workspace file discovery and indexing
-src/types.ts          Shared server data types
+src/server.ts                 LSP entrypoint and request wiring
+src/lsp/completions.ts        Completion item generation
+src/lsp/document-refs.ts      Identifier/reference extraction from documents
+src/parser/c3-parser.ts       Tree-sitter parsing and symbol extraction
+src/project/project-index.ts  Module index and symbol resolution
+src/workspace/scan.ts         Workspace file discovery and indexing
+src/shared/types.ts           Shared server data types
+src/tools/                    Local debug scripts
+docs/roadmap.md               Implementation plan toward a usable C3 LSP
 ```
 
 ## Scripts

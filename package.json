@@ -8,8 +8,8 @@
   },
   "scripts": {
     "dev": "node --import tsx src/server.ts --stdio",
-    "debug:tree": "node --import tsx src/debug-tree.ts",
-    "debug:symbols": "node --import tsx src/debug-symbols.ts",
+    "debug:tree": "node --import tsx src/tools/debug-tree.ts",
+    "debug:symbols": "node --import tsx src/tools/debug-symbols.ts",
     "build": "tsc",
     "start": "node dist/server.js --stdio"
   },

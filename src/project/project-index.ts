@@ -1,4 +1,4 @@
-import type { C3Symbol, ModuleIndex, ParsedDocument } from './types.js';
+import type { C3Symbol, ModuleIndex, ParsedDocument } from '../shared/types.js';
 
 export class ProjectIndex {
   private readonly parsedByUri = new Map<string, ParsedDocument>();

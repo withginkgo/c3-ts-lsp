@@ -2,8 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { parseSource } from './c3-parser.js';
-import type { ProjectIndex } from './project-index.js';
+import { parseSource } from '../parser/c3-parser.js';
+import type { ProjectIndex } from '../project/project-index.js';
 
 type WorkspaceScanReporter = {
   log?: (message: string) => void;
