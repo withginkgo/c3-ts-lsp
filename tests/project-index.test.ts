@@ -80,6 +80,150 @@ test('ProjectIndex resolves imported and qualified module symbols', () => {
   assert.equal(index.findSymbol(appUri, 'lib::net::connect')?.uri, netUri);
 });
 
+test('ProjectIndex findSymbol ignores unrelated modules', () => {
+  const index = new ProjectIndex();
+  const appUri = 'file:///workspace/app.c3';
+  const otherUri = 'file:///workspace/other.c3';
+
+  index.upsert(
+    parseSource(appUri, ['module app;', 'fn void use() {}', ''].join('\n')),
+    false,
+  );
+  index.upsert(
+    parseSource(
+      otherUri,
+      ['module other;', 'fn void unrelated() {}', ''].join('\n'),
+    ),
+    false,
+  );
+  index.rebuild();
+
+  assert.equal(index.findSymbol(appUri, 'unrelated'), undefined);
+});
+
+test('ProjectIndex resolves relative imports', () => {
+  const index = new ProjectIndex();
+  const appUri = 'file:///workspace/app.c3';
+  const netUri = 'file:///workspace/net.c3';
+  const appSource = [
+    'module app;',
+    'import net;',
+    'fn void use() {',
+    '    connect();',
+    '}',
+    '',
+  ].join('\n');
+  const doc = TextDocument.create(appUri, 'c3', 1, appSource);
+
+  index.upsert(parseSource(appUri, appSource), false);
+  index.upsert(
+    parseSource(netUri, 'module app::net;\nfn void connect() {}\n'),
+    false,
+  );
+  index.rebuild();
+
+  const result = index.resolveSymbol(
+    appUri,
+    'connect',
+    doc.positionAt(appSource.indexOf('connect();')),
+  );
+
+  assert.equal(result.reason, 'resolved');
+  assert.equal(result.selected?.uri, netUri);
+});
+
+test('ProjectIndex resolves module aliases', () => {
+  const index = new ProjectIndex();
+  const appUri = 'file:///workspace/app.c3';
+  const netUri = 'file:///workspace/lib/net.c3';
+  const appSource = [
+    'module app;',
+    'alias net = module lib::net;',
+    'fn void use() {',
+    '    net::connect();',
+    '}',
+    '',
+  ].join('\n');
+  const doc = TextDocument.create(appUri, 'c3', 1, appSource);
+
+  index.upsert(parseSource(appUri, appSource), false);
+  index.upsert(
+    parseSource(netUri, 'module lib::net;\nfn void connect() {}\n'),
+    false,
+  );
+  index.rebuild();
+
+  const result = index.resolveSymbol(
+    appUri,
+    'net::connect',
+    doc.positionAt(appSource.indexOf('net::connect')),
+  );
+
+  assert.equal(result.reason, 'resolved');
+  assert.equal(result.selected?.uri, netUri);
+});
+
+test('ProjectIndex resolves relative module aliases', () => {
+  const index = new ProjectIndex();
+  const appUri = 'file:///workspace/app.c3';
+  const netUri = 'file:///workspace/net.c3';
+  const appSource = [
+    'module app;',
+    'alias net = module net;',
+    'fn void use() {',
+    '    net::connect();',
+    '}',
+    '',
+  ].join('\n');
+  const doc = TextDocument.create(appUri, 'c3', 1, appSource);
+
+  index.upsert(parseSource(appUri, appSource), false);
+  index.upsert(
+    parseSource(netUri, 'module app::net;\nfn void connect() {}\n'),
+    false,
+  );
+  index.rebuild();
+
+  const result = index.resolveSymbol(
+    appUri,
+    'net::connect',
+    doc.positionAt(appSource.indexOf('net::connect')),
+  );
+
+  assert.equal(result.reason, 'resolved');
+  assert.equal(result.selected?.uri, netUri);
+});
+
+test('ProjectIndex filters private imported symbols', () => {
+  const index = new ProjectIndex();
+  const appUri = 'file:///workspace/app.c3';
+  const netUri = 'file:///workspace/lib/net.c3';
+  const appSource = [
+    'module app;',
+    'import lib::net;',
+    'fn void use() {',
+    '    hidden();',
+    '}',
+    '',
+  ].join('\n');
+  const doc = TextDocument.create(appUri, 'c3', 1, appSource);
+
+  index.upsert(parseSource(appUri, appSource), false);
+  index.upsert(
+    parseSource(netUri, 'module lib::net;\nfn void hidden() @private {}\n'),
+    false,
+  );
+  index.rebuild();
+
+  const result = index.resolveSymbol(
+    appUri,
+    'hidden',
+    doc.positionAt(appSource.indexOf('hidden();')),
+  );
+
+  assert.equal(result.reason, 'not_found');
+});
+
 test('ProjectIndex removes closed or deleted documents from the index', () => {
   const index = new ProjectIndex();
   const uri = 'file:///workspace/temp.c3';
@@ -94,6 +238,18 @@ test('ProjectIndex removes closed or deleted documents from the index', () => {
 
   assert.equal(index.moduleCount(), 0);
   assert.equal(index.findSymbol(uri, 'gone'), undefined);
+});
+
+test('ProjectIndex incrementally moves files between modules', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/moved.c3';
+
+  index.upsert(parseSource(uri, 'module old;\nfn void item() {}\n'));
+  index.upsert(parseSource(uri, 'module newer;\nfn void item() {}\n'));
+
+  assert.equal(index.getModule('old'), undefined);
+  assert.equal(index.getModule('newer')?.files[0], uri);
+  assert.equal(index.findSymbol(uri, 'item')?.moduleName, 'newer');
 });
 
 test('ProjectIndex resolves nested declaration symbols for hover and definition', () => {

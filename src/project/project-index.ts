@@ -19,8 +19,22 @@ export class ProjectIndex {
     return this.parsedByUri.get(uri);
   }
 
+  allParsed(): ParsedDocument[] {
+    return [...this.parsedByUri.values()];
+  }
+
   getModule(name: string): ModuleIndex | undefined {
     return this.modulesByName.get(name);
+  }
+
+  resolveImportedModule(
+    current: ParsedDocument,
+    importPath: string,
+  ): ModuleIndex | undefined {
+    return (
+      this.modulesByName.get(importPath) ??
+      this.modulesByName.get(`${current.moduleName}::${importPath}`)
+    );
   }
 
   moduleCount(): number {
@@ -28,52 +42,49 @@ export class ProjectIndex {
   }
 
   upsert(parsed: ParsedDocument, rebuild = true): void {
+    const previous = this.parsedByUri.get(parsed.uri);
     this.parsedByUri.set(parsed.uri, parsed);
 
     if (rebuild) {
-      this.rebuild();
+      this.rebuildAffectedModules(previous?.moduleName, parsed.moduleName);
     }
   }
 
   remove(uri: string): void {
+    const previous = this.parsedByUri.get(uri);
     this.parsedByUri.delete(uri);
-    this.rebuild();
+
+    if (previous) {
+      this.rebuildAffectedModules(previous.moduleName);
+    }
   }
 
   rebuild(): void {
     this.modulesByName.clear();
 
     for (const parsed of this.parsedByUri.values()) {
-      if (!parsed.moduleName) continue;
-
-      let mod = this.modulesByName.get(parsed.moduleName);
-
-      if (!mod) {
-        mod = {
-          name: parsed.moduleName,
-          files: [],
-          symbols: new Map(),
-          allSymbols: new Map(),
-          imports: new Set(),
-        };
-
-        this.modulesByName.set(parsed.moduleName, mod);
-      }
-
-      mod.files.push(parsed.uri);
-
-      for (const imp of parsed.imports) {
-        mod.imports.add(imp);
-      }
-
-      for (const sym of parsed.symbols) {
-        const list = mod.symbols.get(sym.name) ?? [];
-        list.push(sym);
-        mod.symbols.set(sym.name, list);
-
-        addSymbolRecursive(mod.allSymbols, sym);
-      }
+      this.addParsedToModule(parsed);
     }
+  }
+
+  visibleSymbols(current: ParsedDocument): C3Symbol[] {
+    const currentModule = this.modulesByName.get(current.moduleName);
+    if (!currentModule) return [];
+
+    const symbols = [...currentModule.symbols.values()].flat();
+
+    for (const imp of currentModule.imports) {
+      const importedModule = this.resolveImportedModule(current, imp);
+      if (!importedModule) continue;
+
+      symbols.push(
+        ...[...importedModule.symbols.values()]
+          .flat()
+          .filter((symbol) => isVisibleFrom(symbol, current.moduleName)),
+      );
+    }
+
+    return symbols;
   }
 
   findSymbol(currentUri: string, ref: string): C3Symbol | undefined {
@@ -91,16 +102,13 @@ export class ProjectIndex {
 
     if (currentModule) {
       for (const imp of currentModule.imports) {
-        const importedModule = this.modulesByName.get(imp);
-        const imported = importedModule?.allSymbols.get(ref)?.[0];
+        const importedModule = this.resolveImportedModule(current, imp);
+        const imported = importedModule?.allSymbols
+          .get(ref)
+          ?.find((symbol) => isVisibleFrom(symbol, current.moduleName));
 
         if (imported) return imported;
       }
-    }
-
-    for (const mod of this.modulesByName.values()) {
-      const found = mod.allSymbols.get(ref)?.[0];
-      if (found) return found;
     }
 
     return undefined;
@@ -155,8 +163,12 @@ export class ProjectIndex {
 
     if (currentModule) {
       for (const imp of currentModule.imports) {
-        const importedModule = this.modulesByName.get(imp);
-        imported.push(...(importedModule?.symbols.get(ref) ?? []));
+        const importedModule = this.resolveImportedModule(current, imp);
+        imported.push(
+          ...(importedModule?.symbols.get(ref) ?? []).filter((symbol) =>
+            isVisibleFrom(symbol, current.moduleName),
+          ),
+        );
       }
     }
 
@@ -172,12 +184,15 @@ export class ProjectIndex {
 
     const currentModule = this.modulesByName.get(current.moduleName);
 
+    const aliased = currentModule?.moduleAliases.get(prefix);
+    if (aliased) return this.resolveImportedModule(current, aliased);
+
     if (currentModule) {
       for (const imp of currentModule.imports) {
         const lastSegment = imp.split('::').at(-1);
 
         if (lastSegment === prefix) {
-          return this.modulesByName.get(imp);
+          return this.resolveImportedModule(current, imp);
         }
       }
     }
@@ -207,11 +222,23 @@ export class ProjectIndex {
     const modulePrefix = parts.slice(0, -1).join('::');
 
     const directModule = this.modulesByName.get(modulePrefix);
-    const direct = directModule?.allSymbols.get(symbolName) ?? [];
+    const direct =
+      directModule?.allSymbols
+        .get(symbolName)
+        ?.filter((symbol) => isVisibleFrom(symbol, current.moduleName)) ?? [];
 
     if (direct.length > 0) return direct;
 
     const currentModule = this.modulesByName.get(current.moduleName);
+
+    const aliased = currentModule?.moduleAliases.get(modulePrefix);
+    if (aliased) {
+      return (
+        this.resolveImportedModule(current, aliased)
+          ?.allSymbols.get(symbolName)
+          ?.filter((symbol) => isVisibleFrom(symbol, current.moduleName)) ?? []
+      );
+    }
 
     if (currentModule) {
       const imported: C3Symbol[] = [];
@@ -220,8 +247,12 @@ export class ProjectIndex {
         const lastSegment = imp.split('::').at(-1);
 
         if (lastSegment === modulePrefix) {
-          const importedModule = this.modulesByName.get(imp);
-          imported.push(...(importedModule?.allSymbols.get(symbolName) ?? []));
+          const importedModule = this.resolveImportedModule(current, imp);
+          imported.push(
+            ...(importedModule?.allSymbols.get(symbolName) ?? []).filter(
+              (symbol) => isVisibleFrom(symbol, current.moduleName),
+            ),
+          );
         }
       }
 
@@ -246,16 +277,75 @@ export class ProjectIndex {
       const importedCandidates: C3Symbol[] = [];
 
       for (const imp of currentModule.imports) {
-        const importedModule = this.modulesByName.get(imp);
+        const importedModule = this.resolveImportedModule(current, imp);
         const imported = findUnqualifiedNestedUsageSymbol(importedModule, ref);
 
-        if (imported) importedCandidates.push(imported);
+        if (imported && isVisibleFrom(imported, current.moduleName)) {
+          importedCandidates.push(imported);
+        }
       }
 
       if (importedCandidates.length > 0) return importedCandidates;
     }
 
     return [];
+  }
+
+  private rebuildAffectedModules(
+    ...moduleNames: Array<string | undefined>
+  ): void {
+    for (const moduleName of new Set(moduleNames.filter(Boolean))) {
+      this.rebuildModule(moduleName);
+    }
+  }
+
+  private rebuildModule(moduleName: string | undefined): void {
+    if (!moduleName) return;
+
+    this.modulesByName.delete(moduleName);
+
+    for (const parsed of this.parsedByUri.values()) {
+      if (parsed.moduleName === moduleName) {
+        this.addParsedToModule(parsed);
+      }
+    }
+  }
+
+  private addParsedToModule(parsed: ParsedDocument): void {
+    if (!parsed.moduleName) return;
+
+    let mod = this.modulesByName.get(parsed.moduleName);
+
+    if (!mod) {
+      mod = {
+        name: parsed.moduleName,
+        files: [],
+        symbols: new Map(),
+        allSymbols: new Map(),
+        imports: new Set(),
+        moduleAliases: new Map(),
+      };
+
+      this.modulesByName.set(parsed.moduleName, mod);
+    }
+
+    mod.files.push(parsed.uri);
+
+    for (const imp of parsed.imports) {
+      mod.imports.add(imp);
+    }
+
+    for (const alias of parsed.moduleAliases) {
+      mod.moduleAliases.set(alias.name, alias.target);
+    }
+
+    for (const sym of parsed.symbols) {
+      const list = mod.symbols.get(sym.name) ?? [];
+      list.push(sym);
+      mod.symbols.set(sym.name, list);
+
+      addSymbolRecursive(mod.allSymbols, sym);
+    }
   }
 }
 
@@ -341,6 +431,14 @@ function findUnqualifiedNestedUsageSymbol(
     ?.find((symbol) => symbol.kind === SymbolKind.Constant);
 }
 
+function isVisibleFrom(symbol: C3Symbol, moduleName: string): boolean {
+  if (symbol.moduleName === moduleName) return true;
+
+  return !symbol.attributes.some(
+    (attribute) => attribute.toLowerCase() === '@private',
+  );
+}
+
 function positionInRange(position: Position, range: Range): boolean {
   return (
     comparePositions(range.start, position) <= 0 &&
@@ -362,20 +460,31 @@ function rangeSize(range: Range): number {
 }
 
 function resultFromCandidates(candidates: C3Symbol[]): ResolveResult {
-  if (candidates.length === 0) {
+  const orderedCandidates = [...candidates].sort(compareSymbols);
+
+  if (orderedCandidates.length === 0) {
     return { candidates: [], reason: 'not_found' };
   }
 
-  if (candidates.length === 1) {
+  if (orderedCandidates.length === 1) {
     return {
-      selected: candidates[0],
-      candidates,
+      selected: orderedCandidates[0],
+      candidates: orderedCandidates,
       reason: 'resolved',
     };
   }
 
   return {
-    candidates,
+    candidates: orderedCandidates,
     reason: 'ambiguous',
   };
+}
+
+function compareSymbols(a: C3Symbol, b: C3Symbol): number {
+  return (
+    a.moduleName.localeCompare(b.moduleName) ||
+    a.name.localeCompare(b.name) ||
+    a.uri.localeCompare(b.uri) ||
+    comparePositions(a.selectionRange.start, b.selectionRange.start)
+  );
 }

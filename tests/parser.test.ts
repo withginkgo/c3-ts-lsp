@@ -75,10 +75,42 @@ test('parseSource extracts import paths', () => {
 
   assert.equal(parsed.moduleName, 'app');
   assert.deepEqual(parsed.imports, ['lib::net']);
+  assert.equal(parsed.importSpecs[0]?.path, 'lib::net');
   assert.deepEqual(
     parsed.symbols.map((symbol) => symbol.name),
     ['use'],
   );
+});
+
+test('parseSource extracts module aliases', () => {
+  const parsed = parseSource(
+    'file:///workspace/app.c3',
+    [
+      'module app;',
+      'alias net = module lib::net;',
+      'fn void use() {}',
+      '',
+    ].join('\n'),
+  );
+
+  assert.deepEqual(parsed.moduleAliases, [
+    {
+      name: 'net',
+      target: 'lib::net',
+      range: {
+        start: { line: 1, character: 0 },
+        end: { line: 1, character: 28 },
+      },
+      selectionRange: {
+        start: { line: 1, character: 6 },
+        end: { line: 1, character: 9 },
+      },
+      targetRange: {
+        start: { line: 1, character: 19 },
+        end: { line: 1, character: 27 },
+      },
+    },
+  ]);
 });
 
 test('parseSource extracts Phase 1 top-level declaration coverage', () => {

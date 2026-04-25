@@ -17,6 +17,7 @@ import {
 } from 'vscode-languageserver/node.js';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 
+import { semanticDiagnostics } from './analysis/diagnostics.js';
 import { completionItems } from './lsp/completions.js';
 import { wordAtPosition } from './lsp/document-refs.js';
 import { documentSymbols } from './lsp/document-symbols.js';
@@ -73,6 +74,7 @@ connection.onInitialized(() => {
     log: (message) => connection.console.log(message),
     error: (message) => connection.console.error(message),
   });
+  publishWorkspaceDiagnostics();
 
   workspaceWatcher = watchWorkspace(
     workspaceRoot,
@@ -160,7 +162,7 @@ connection.onCompletion((params) => {
 function parseAndIndexDocument(doc: TextDocument): void {
   const parsed = parseSource(doc.uri, doc.getText());
   projectIndex.upsert(parsed);
-  publishDiagnostics(parsed);
+  publishWorkspaceDiagnostics();
 
   connection.console.log(
     `indexed ${doc.uri}: module=${parsed.moduleName}, symbols=${parsed.symbols.length}`,
@@ -187,7 +189,7 @@ function indexDocumentFromDisk(uri: string): void {
         const source = fs.readFileSync(filePath, 'utf8');
         const parsed = parseSource(uri, source);
         projectIndex.upsert(parsed);
-        publishDiagnostics(parsed);
+        publishWorkspaceDiagnostics();
         connection.console.log(
           `indexed ${uri}: module=${parsed.moduleName}, symbols=${parsed.symbols.length}`,
         );
@@ -206,14 +208,26 @@ function indexDocumentFromDisk(uri: string): void {
 function removeIndexedDocument(uri: string): void {
   projectIndex.remove(uri);
   connection.sendDiagnostics({ uri, diagnostics: [] });
+  publishWorkspaceDiagnostics();
   connection.console.log(`removed ${uri} from index`);
 }
 
 function publishDiagnostics(parsed: ReturnType<typeof parseSource>): void {
+  const diagnostics =
+    parsed.diagnostics.length > 0
+      ? parsed.diagnostics
+      : [...parsed.diagnostics, ...semanticDiagnostics(projectIndex, parsed)];
+
   connection.sendDiagnostics({
     uri: parsed.uri,
-    diagnostics: parsed.diagnostics,
+    diagnostics,
   });
+}
+
+function publishWorkspaceDiagnostics(): void {
+  for (const parsed of projectIndex.allParsed()) {
+    publishDiagnostics(parsed);
+  }
 }
 
 function hoverFromResolveResult(result: ResolveResult): Hover | null {

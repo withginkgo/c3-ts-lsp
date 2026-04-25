@@ -11,12 +11,20 @@ All notable project changes are recorded here.
 - Added hover and definition handling for ambiguous symbol candidates.
 - Added workspace file watching so changed, created, and deleted C3 source
   files update the project index without restarting the server.
+- Added module alias and relative import resolution for hover, definition, and
+  module-prefix completions.
+- Added semantic diagnostics for unresolved imports, unresolved module alias
+  targets, unresolved expression symbols, and ambiguous expression symbols.
 
 ### Changed
 
 - Made position-aware hover and definition avoid unrelated global module
   fallback and report ambiguous imported symbols instead of silently selecting
   the first match.
+- Made unqualified completions include visible imported symbols while excluding
+  unrelated modules and private imported declarations.
+- Made project index updates rebuild only affected modules during single-file
+  changes.
 
 ## [0.2.0] - 2026-04-25
 

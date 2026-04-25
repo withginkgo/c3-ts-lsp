@@ -22,12 +22,28 @@ export type C3Symbol = {
   children: C3Symbol[];
 };
 
+export type C3Import = {
+  path: string;
+  range: Range;
+  selectionRange: Range;
+  attributes: string[];
+};
+
+export type C3ModuleAlias = {
+  name: string;
+  target: string;
+  range: Range;
+  selectionRange: Range;
+  targetRange: Range;
+};
+
 export type ModuleIndex = {
   name: string;
   files: string[];
   symbols: Map<string, C3Symbol[]>;
   allSymbols: Map<string, C3Symbol[]>;
   imports: Set<string>;
+  moduleAliases: Map<string, string>;
 };
 
 export type ParsedDocument = {
@@ -37,6 +53,8 @@ export type ParsedDocument = {
   scopedSymbols: C3Symbol[];
   moduleName: string;
   imports: string[];
+  importSpecs: C3Import[];
+  moduleAliases: C3ModuleAlias[];
   diagnostics: Diagnostic[];
 };
 

@@ -16,14 +16,18 @@ The server currently provides a working prototype:
 - Nested symbol extraction for struct/bitstruct/interface members, enum values,
   constdef values, function parameters, and macro parameters.
 - Basic hover, definition, document symbols, and completions.
+- Position-aware resolver with import, relative module, module alias,
+  visibility, ambiguity, and unresolved-symbol handling.
+- Semantic diagnostics for unresolved imports, unresolved module aliases,
+  unresolved expression symbols, and ambiguous expression symbols.
 - Syntax diagnostics from tree-sitter parse errors.
 - Small debug scripts for parser tree and symbol inspection.
 - A Node test runner setup covering parser extraction, project indexing, and
   completion behavior.
 
-The implementation is intentionally shallow. It indexes top-level declarations
-and resolves symbols mostly by name. It does not yet model lexical scopes,
-member declarations, overloads, type relationships, diagnostics, or editor
+The implementation is still intentionally lightweight. It has project/module
+resolution and basic scoped local lookup, but it does not yet model member
+declarations, overloads, type relationships, references, rename, or editor
 packaging.
 
 ## Target Architecture
@@ -90,6 +94,8 @@ Exit criteria:
 
 Goal: resolve names according to C3 project/module rules instead of global
 name fallback.
+
+Status: completed in Unreleased.
 
 - Model imports, aliases, relative module paths, public/private visibility, and
   duplicate module files.

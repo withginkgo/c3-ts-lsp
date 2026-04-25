@@ -9,7 +9,12 @@ import {
 } from 'vscode-languageserver/node.js';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 
-import type { C3Symbol, ParsedDocument } from '../shared/types.js';
+import type {
+  C3Import,
+  C3ModuleAlias,
+  C3Symbol,
+  ParsedDocument,
+} from '../shared/types.js';
 
 const parser = new Parser();
 parser.setLanguage(C3 as Parser.Language);
@@ -21,7 +26,9 @@ export function parseSource(uri: string, source: string): ParsedDocument {
   const tree = parser.parse(source);
 
   const moduleName = extractModuleName(tree.rootNode);
-  const imports = extractImports(tree.rootNode);
+  const importSpecs = extractImportSpecs(tree.rootNode);
+  const imports = importSpecs.map((imp) => imp.path);
+  const moduleAliases = extractModuleAliases(doc, tree.rootNode);
   const symbols = extractTopLevelSymbols(doc, tree.rootNode, moduleName);
   const scopedSymbols = extractScopedSymbols(doc, tree.rootNode, moduleName);
   const diagnostics = collectSyntaxDiagnostics(tree.rootNode);
@@ -33,6 +40,8 @@ export function parseSource(uri: string, source: string): ParsedDocument {
     scopedSymbols,
     moduleName,
     imports,
+    importSpecs,
+    moduleAliases,
     diagnostics,
   };
 }
@@ -48,18 +57,59 @@ function extractModuleName(root: SyntaxNode): string {
   return modulePath?.text ?? '';
 }
 
-function extractImports(root: SyntaxNode): string[] {
-  const imports: string[] = [];
+function extractImportSpecs(root: SyntaxNode): C3Import[] {
+  const imports: C3Import[] = [];
 
   for (const child of root.namedChildren) {
     if (child.type !== 'import_declaration') continue;
 
     for (const importPath of descendantsOfType(child, 'import_path')) {
-      imports.push(importPath.text);
+      const pathNode = directChildOfType(importPath, 'path_ident');
+      const pathText = pathNode?.text ?? importPath.text;
+
+      imports.push({
+        path: pathText,
+        range: rangeFromNode(importPath),
+        selectionRange: pathNode
+          ? rangeFromNode(pathNode)
+          : rangeFromNode(importPath),
+        attributes: attributesFor(importPath),
+      });
     }
   }
 
   return imports;
+}
+
+function extractModuleAliases(
+  doc: TextDocument,
+  root: SyntaxNode,
+): C3ModuleAlias[] {
+  const aliases: C3ModuleAlias[] = [];
+
+  for (const child of root.namedChildren) {
+    if (
+      child.type !== 'alias_declaration' ||
+      !child.text.includes('= module')
+    ) {
+      continue;
+    }
+
+    const nameNode = child.childForFieldName('name');
+    const targetNode = directChildOfType(child, 'path_ident');
+
+    if (!nameNode || !targetNode) continue;
+
+    aliases.push({
+      name: nameNode.text,
+      target: targetNode.text,
+      range: rangeFromNode(child),
+      selectionRange: rangeFromNode(nameNode),
+      targetRange: rangeFromNode(targetNode),
+    });
+  }
+
+  return aliases;
 }
 
 function extractTopLevelSymbols(

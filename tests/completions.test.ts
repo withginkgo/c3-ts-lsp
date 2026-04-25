@@ -88,3 +88,127 @@ test('completionItems returns imported module members after a module prefix', ()
     [['connect', CompletionItemKind.Function, 'void connect()']],
   );
 });
+
+test('completionItems returns module alias members after a module prefix', () => {
+  const index = new ProjectIndex();
+  const appUri = 'file:///workspace/app.c3';
+  const netUri = 'file:///workspace/lib/net.c3';
+  const appSource = [
+    'module app;',
+    'alias net = module lib::net;',
+    'fn void use() {}',
+    '',
+  ].join('\n');
+  const completionSource = [
+    'module app;',
+    'alias net = module lib::net;',
+    'fn void use() {',
+    '    net::',
+    '}',
+    '',
+  ].join('\n');
+  const netSource = ['module lib::net;', 'fn void connect() {}', ''].join('\n');
+  const parsedApp = parseSource(appUri, appSource);
+  const doc = TextDocument.create(appUri, 'c3', 1, completionSource);
+
+  index.upsert(parsedApp, false);
+  index.upsert(parseSource(netUri, netSource), false);
+  index.rebuild();
+
+  const items = completionItems(
+    index,
+    doc,
+    parsedApp,
+    doc.positionAt(completionSource.indexOf('net::') + 'net::'.length),
+  );
+
+  assert.deepEqual(
+    items.map((item) => [item.label, item.kind, item.detail]),
+    [['connect', CompletionItemKind.Function, 'void connect()']],
+  );
+});
+
+test('completionItems includes imported symbols and excludes unrelated modules', () => {
+  const index = new ProjectIndex();
+  const appUri = 'file:///workspace/app.c3';
+  const netUri = 'file:///workspace/lib/net.c3';
+  const otherUri = 'file:///workspace/other.c3';
+  const appSource = [
+    'module app;',
+    'import lib::net;',
+    'fn void local() {}',
+    '',
+  ].join('\n');
+  const netSource = ['module lib::net;', 'fn void connect() {}', ''].join('\n');
+  const otherSource = ['module other;', 'fn void unrelated() {}', ''].join(
+    '\n',
+  );
+  const parsedApp = parseSource(appUri, appSource);
+  const doc = TextDocument.create(appUri, 'c3', 1, appSource);
+
+  index.upsert(parsedApp, false);
+  index.upsert(parseSource(netUri, netSource), false);
+  index.upsert(parseSource(otherUri, otherSource), false);
+  index.rebuild();
+
+  const labels = completionItems(
+    index,
+    doc,
+    parsedApp,
+    doc.positionAt(appSource.length),
+  ).map((item) => item.label);
+
+  assert.equal(labels.includes('local'), true);
+  assert.equal(labels.includes('connect'), true);
+  assert.equal(labels.includes('unrelated'), false);
+});
+
+test('completionItems includes relative imported symbols', () => {
+  const index = new ProjectIndex();
+  const appUri = 'file:///workspace/app.c3';
+  const netUri = 'file:///workspace/net.c3';
+  const appSource = ['module app;', 'import net;', ''].join('\n');
+  const netSource = ['module app::net;', 'fn void connect() {}', ''].join('\n');
+  const parsedApp = parseSource(appUri, appSource);
+  const doc = TextDocument.create(appUri, 'c3', 1, appSource);
+
+  index.upsert(parsedApp, false);
+  index.upsert(parseSource(netUri, netSource), false);
+  index.rebuild();
+
+  const labels = completionItems(
+    index,
+    doc,
+    parsedApp,
+    doc.positionAt(appSource.length),
+  ).map((item) => item.label);
+
+  assert.equal(labels.includes('connect'), true);
+});
+
+test('completionItems excludes private imported symbols', () => {
+  const index = new ProjectIndex();
+  const appUri = 'file:///workspace/app.c3';
+  const netUri = 'file:///workspace/lib/net.c3';
+  const appSource = ['module app;', 'import lib::net;', ''].join('\n');
+  const netSource = [
+    'module lib::net;',
+    'fn void hidden() @private {}',
+    '',
+  ].join('\n');
+  const parsedApp = parseSource(appUri, appSource);
+  const doc = TextDocument.create(appUri, 'c3', 1, appSource);
+
+  index.upsert(parsedApp, false);
+  index.upsert(parseSource(netUri, netSource), false);
+  index.rebuild();
+
+  const labels = completionItems(
+    index,
+    doc,
+    parsedApp,
+    doc.positionAt(appSource.length),
+  ).map((item) => item.label);
+
+  assert.equal(labels.includes('hidden'), false);
+});

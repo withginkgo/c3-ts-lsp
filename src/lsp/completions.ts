@@ -23,16 +23,13 @@ export function completionItems(
     return moduleMemberCompletions(index, current, prefix);
   }
 
-  const currentModule = index.getModule(current.moduleName);
-  const localSymbols = currentModule
-    ? [...currentModule.symbols.values()].flat()
-    : [];
-
-  const symbolItems: CompletionItem[] = localSymbols.map((symbol) => ({
-    label: symbol.name,
-    kind: toCompletionKind(symbol.kind),
-    detail: symbol.signature,
-  }));
+  const symbolItems: CompletionItem[] = index
+    .visibleSymbols(current)
+    .map((symbol) => ({
+      label: symbol.name,
+      kind: toCompletionKind(symbol.kind),
+      detail: symbol.signature,
+    }));
 
   return [...keywordCompletions(), ...symbolItems];
 }

@@ -7,11 +7,15 @@ document symbols, hover, definition, and completion support over LSP.
 ## Features
 
 - Workspace-wide C3 indexing for `.c3`, `.c3i`, and `.c3t` files.
+- Workspace file watching for created, changed, and deleted C3 source files.
 - Document symbols for top-level C3 declarations.
 - Nested document symbols for declaration members, enum values, and parameters.
-- Hover and definition lookup across files in the same project.
-- Module-aware completions for direct, imported, and relative module paths.
-- Syntax diagnostics from tree-sitter parse errors.
+- Hover and definition lookup across files in the same project, including
+  imported modules, relative module paths, and module aliases.
+- Module-aware completions for direct, imported, relative, and aliased module
+  paths.
+- Syntax and basic semantic diagnostics from tree-sitter parse errors, missing
+  imports, unresolved symbols, and ambiguous symbols.
 
 ## Project Structure
 
@@ -23,6 +27,8 @@ src/lsp/document-refs.ts      Identifier/reference extraction from documents
 src/parser/c3-parser.ts       Tree-sitter parsing and symbol extraction
 src/project/project-index.ts  Module index and symbol resolution
 src/workspace/scan.ts         Workspace file discovery and indexing
+src/workspace/watch.ts        Workspace file watching and index updates
+src/analysis/diagnostics.ts   Semantic diagnostic generation
 src/shared/types.ts           Shared server data types
 src/tools/                    Local debug scripts
 tests/                        Node test runner coverage for parser/index/LSP helpers
