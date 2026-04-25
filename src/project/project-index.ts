@@ -1,3 +1,9 @@
+import {
+  SymbolKind,
+  type Position,
+  type Range,
+} from 'vscode-languageserver/node.js';
+
 import type { C3Symbol, ModuleIndex, ParsedDocument } from '../shared/types.js';
 
 export class ProjectIndex {
@@ -95,6 +101,30 @@ export class ProjectIndex {
     return undefined;
   }
 
+  findSymbolAt(
+    currentUri: string,
+    ref: string,
+    position: Position,
+  ): C3Symbol | undefined {
+    const current = this.parsedByUri.get(currentUri);
+    if (!current) return undefined;
+
+    if (ref.includes('::')) {
+      return this.resolveQualifiedSymbol(current, ref);
+    }
+
+    const declared = findDeclaredSymbolAt(current.symbols, ref, position);
+    if (declared) return declared;
+
+    const scoped = findScopedSymbolAt(current.scopedSymbols, ref, position);
+    if (scoped) return scoped;
+
+    const moduleSymbol = this.findVisibleModuleSymbol(current, ref);
+    if (moduleSymbol) return moduleSymbol;
+
+    return this.findVisibleUnqualifiedNestedSymbol(current, ref);
+  }
+
   resolveModuleFromPrefix(
     current: ParsedDocument,
     prefix: string,
@@ -159,6 +189,58 @@ export class ProjectIndex {
 
     return undefined;
   }
+
+  private findVisibleModuleSymbol(
+    current: ParsedDocument,
+    ref: string,
+  ): C3Symbol | undefined {
+    const currentModule = this.modulesByName.get(current.moduleName);
+    const local = currentModule?.symbols.get(ref)?.[0];
+
+    if (local) return local;
+
+    if (currentModule) {
+      for (const imp of currentModule.imports) {
+        const importedModule = this.modulesByName.get(imp);
+        const imported = importedModule?.symbols.get(ref)?.[0];
+
+        if (imported) return imported;
+      }
+    }
+
+    for (const mod of this.modulesByName.values()) {
+      const found = mod.symbols.get(ref)?.[0];
+      if (found) return found;
+    }
+
+    return undefined;
+  }
+
+  private findVisibleUnqualifiedNestedSymbol(
+    current: ParsedDocument,
+    ref: string,
+  ): C3Symbol | undefined {
+    const currentModule = this.modulesByName.get(current.moduleName);
+    const local = findUnqualifiedNestedUsageSymbol(currentModule, ref);
+
+    if (local) return local;
+
+    if (currentModule) {
+      for (const imp of currentModule.imports) {
+        const importedModule = this.modulesByName.get(imp);
+        const imported = findUnqualifiedNestedUsageSymbol(importedModule, ref);
+
+        if (imported) return imported;
+      }
+    }
+
+    for (const mod of this.modulesByName.values()) {
+      const found = findUnqualifiedNestedUsageSymbol(mod, ref);
+      if (found) return found;
+    }
+
+    return undefined;
+  }
 }
 
 function addSymbolRecursive(
@@ -172,4 +254,93 @@ function addSymbolRecursive(
   for (const child of symbol.children) {
     addSymbolRecursive(symbols, child);
   }
+}
+
+function findDeclaredSymbolAt(
+  symbols: C3Symbol[],
+  ref: string,
+  position: Position,
+): C3Symbol | undefined {
+  for (const symbol of symbols) {
+    if (
+      symbol.name === ref &&
+      positionInRange(position, symbol.selectionRange)
+    ) {
+      return symbol;
+    }
+
+    const child = findDeclaredSymbolAt(symbol.children, ref, position);
+    if (child) return child;
+  }
+
+  return undefined;
+}
+
+function findScopedSymbolAt(
+  symbols: C3Symbol[],
+  ref: string,
+  position: Position,
+): C3Symbol | undefined {
+  const candidates = symbols
+    .filter((symbol) => symbol.name === ref)
+    .filter((symbol) => scopedSymbolVisibleAt(symbol, position));
+
+  return candidates.sort((a, b) => compareScopedCandidates(a, b, position))[0];
+}
+
+function scopedSymbolVisibleAt(symbol: C3Symbol, position: Position): boolean {
+  if (positionInRange(position, symbol.selectionRange)) return true;
+
+  return (
+    !!symbol.scopeRange &&
+    positionInRange(position, symbol.scopeRange) &&
+    comparePositions(symbol.selectionRange.start, position) <= 0
+  );
+}
+
+function compareScopedCandidates(
+  a: C3Symbol,
+  b: C3Symbol,
+  position: Position,
+): number {
+  const aExact = positionInRange(position, a.selectionRange) ? 1 : 0;
+  const bExact = positionInRange(position, b.selectionRange) ? 1 : 0;
+
+  if (aExact !== bExact) return bExact - aExact;
+
+  const aScopeSize = rangeSize(a.scopeRange ?? a.range);
+  const bScopeSize = rangeSize(b.scopeRange ?? b.range);
+
+  if (aScopeSize !== bScopeSize) return aScopeSize - bScopeSize;
+
+  return comparePositions(b.selectionRange.start, a.selectionRange.start);
+}
+
+function findUnqualifiedNestedUsageSymbol(
+  mod: ModuleIndex | undefined,
+  ref: string,
+): C3Symbol | undefined {
+  return mod?.allSymbols
+    .get(ref)
+    ?.find((symbol) => symbol.kind === SymbolKind.Constant);
+}
+
+function positionInRange(position: Position, range: Range): boolean {
+  return (
+    comparePositions(range.start, position) <= 0 &&
+    comparePositions(position, range.end) <= 0
+  );
+}
+
+function comparePositions(a: Position, b: Position): number {
+  if (a.line !== b.line) return a.line - b.line;
+  return a.character - b.character;
+}
+
+function rangeSize(range: Range): number {
+  return (
+    (range.end.line - range.start.line) * 1_000_000 +
+    range.end.character -
+    range.start.character
+  );
 }

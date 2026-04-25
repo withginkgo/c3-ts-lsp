@@ -3,6 +3,8 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
 
+import { TextDocument } from 'vscode-languageserver-textdocument';
+
 import { parseSource } from '../src/parser/c3-parser.js';
 import { ProjectIndex } from '../src/project/project-index.js';
 
@@ -109,4 +111,49 @@ test('ProjectIndex resolves nested declaration symbols for hover and definition'
   assert.equal(index.findSymbol(uri, 'GREEN')?.signature, 'GREEN = 2');
   assert.equal(index.findSymbol(uri, 'path')?.signature, 'String path');
   assert.equal(index.findSymbol(uri, 'a')?.signature, 'int a');
+});
+
+test('ProjectIndex resolves local declarations by cursor position', () => {
+  const index = new ProjectIndex();
+  const mainUri = pathToFileURL('testdata/simple/main.c3').toString();
+  const httpUri = pathToFileURL('testdata/simple/http.c3').toString();
+  const mainSource = readFileSync('testdata/simple/main.c3', 'utf8');
+  const doc = TextDocument.create(mainUri, 'c3', 1, mainSource);
+
+  index.upsert(parseSource(mainUri, mainSource), false);
+  index.upsert(
+    parseSource(httpUri, readFileSync('testdata/simple/http.c3', 'utf8')),
+    false,
+  );
+  index.rebuild();
+
+  const symbol = index.findSymbolAt(
+    mainUri,
+    'res',
+    doc.positionAt(mainSource.indexOf('&res') + 1),
+  );
+
+  assert.equal(symbol?.uri, mainUri);
+  assert.equal(symbol?.signature, 'HttpResponse res;');
+});
+
+test('ProjectIndex does not resolve parameters from unrelated scopes by position', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'fn void takes(int value) {}',
+    'fn void use() {',
+    '    value;',
+    '}',
+    '',
+  ].join('\n');
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+
+  index.upsert(parseSource(uri, source));
+
+  assert.equal(
+    index.findSymbolAt(uri, 'value', doc.positionAt(source.indexOf('value;'))),
+    undefined,
+  );
 });

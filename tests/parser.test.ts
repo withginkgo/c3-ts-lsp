@@ -47,6 +47,26 @@ test('parseSource extracts multiple top-level declaration kinds', () => {
   );
 });
 
+test('parseSource extracts scoped parameters and local declarations', () => {
+  const file = 'testdata/simple/main.c3';
+  const parsed = parseSource(
+    pathToFileURL(file).toString(),
+    readFileSync(file, 'utf8'),
+  );
+
+  assert.deepEqual(
+    parsed.scopedSymbols.map((symbol) => [
+      symbol.name,
+      symbol.signature,
+      symbol.returnType,
+    ]),
+    [
+      ['args', 'String[] args', 'String[]'],
+      ['res', 'HttpResponse res;', 'HttpResponse'],
+    ],
+  );
+});
+
 test('parseSource extracts import paths', () => {
   const parsed = parseSource(
     'file:///workspace/app.c3',

@@ -18,6 +18,7 @@ export type C3Symbol = {
   attributes: string[];
   returnType?: string;
   parameters: string[];
+  scopeRange?: Range;
   children: C3Symbol[];
 };
 
@@ -33,6 +34,7 @@ export type ParsedDocument = {
   uri: string;
   tree: Tree;
   symbols: C3Symbol[];
+  scopedSymbols: C3Symbol[];
   moduleName: string;
   imports: string[];
   diagnostics: Diagnostic[];

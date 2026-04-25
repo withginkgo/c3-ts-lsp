@@ -98,7 +98,11 @@ connection.onHover((params): Hover | null => {
   const word = wordAtPosition(doc, params.position);
   if (!word) return null;
 
-  const symbol = projectIndex.findSymbol(params.textDocument.uri, word);
+  const symbol = projectIndex.findSymbolAt(
+    params.textDocument.uri,
+    word,
+    params.position,
+  );
   if (!symbol) return null;
 
   return {
@@ -122,7 +126,11 @@ connection.onDefinition((params): Location | null => {
   const word = wordAtPosition(doc, params.position);
   if (!word) return null;
 
-  const symbol = projectIndex.findSymbol(params.textDocument.uri, word);
+  const symbol = projectIndex.findSymbolAt(
+    params.textDocument.uri,
+    word,
+    params.position,
+  );
   if (!symbol) return null;
 
   return Location.create(symbol.uri, symbol.selectionRange);

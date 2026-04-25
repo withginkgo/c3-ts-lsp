@@ -23,12 +23,14 @@ export function parseSource(uri: string, source: string): ParsedDocument {
   const moduleName = extractModuleName(tree.rootNode);
   const imports = extractImports(tree.rootNode);
   const symbols = extractTopLevelSymbols(doc, tree.rootNode, moduleName);
+  const scopedSymbols = extractScopedSymbols(doc, tree.rootNode, moduleName);
   const diagnostics = collectSyntaxDiagnostics(tree.rootNode);
 
   return {
     uri,
     tree,
     symbols,
+    scopedSymbols,
     moduleName,
     imports,
     diagnostics,
@@ -72,6 +74,56 @@ function extractTopLevelSymbols(
   }
 
   return symbols;
+}
+
+function extractScopedSymbols(
+  doc: TextDocument,
+  root: SyntaxNode,
+  moduleName: string,
+): C3Symbol[] {
+  const symbols: C3Symbol[] = [];
+
+  for (const node of root.namedChildren) {
+    symbols.push(...scopedSymbolsForNode(doc, node, moduleName));
+  }
+
+  return symbols;
+}
+
+function scopedSymbolsForNode(
+  doc: TextDocument,
+  node: SyntaxNode,
+  moduleName: string,
+): C3Symbol[] {
+  switch (node.type) {
+    case 'func_definition':
+    case 'macro_declaration':
+      return scopedSymbolsForCallable(doc, node, moduleName);
+
+    case 'global_declaration': {
+      const funcDecl = directChildOfType(node, 'func_declaration');
+      return funcDecl
+        ? scopedSymbolsForCallable(doc, funcDecl, moduleName)
+        : [];
+    }
+
+    default:
+      return [];
+  }
+}
+
+function scopedSymbolsForCallable(
+  doc: TextDocument,
+  node: SyntaxNode,
+  moduleName: string,
+): C3Symbol[] {
+  const body = node.childForFieldName('body');
+  const scopeRange = rangeFromNode(body ?? node);
+
+  return [
+    ...parameterSymbols(doc, node, moduleName, scopeRange),
+    ...(body ? localDeclarationSymbols(doc, body, moduleName) : []),
+  ];
 }
 
 function topLevelSymbolsForNode(
@@ -446,6 +498,7 @@ function parameterSymbols(
   doc: TextDocument,
   node: SyntaxNode,
   moduleName: string,
+  scopeRange?: Range,
 ): C3Symbol[] {
   const symbols: C3Symbol[] = [];
 
@@ -457,6 +510,7 @@ function parameterSymbols(
       createSymbol(doc, param, nameNode, moduleName, SymbolKind.Variable, {
         signature: declarationSignature(param),
         returnType: param.childForFieldName('type')?.text,
+        scopeRange,
       }),
     );
   }
@@ -477,9 +531,53 @@ function parameterSymbols(
         SymbolKind.Variable,
         {
           signature: compactText(trailingBlockParam.text),
+          scopeRange,
         },
       ),
     );
+  }
+
+  return symbols;
+}
+
+function localDeclarationSymbols(
+  doc: TextDocument,
+  scopeRoot: SyntaxNode,
+  moduleName: string,
+): C3Symbol[] {
+  const symbols: C3Symbol[] = [];
+
+  for (const declaration of descendantsOfType(scopeRoot, 'declaration')) {
+    const parent = declaration.parent;
+
+    if (parent?.type !== 'declaration_stmt') continue;
+
+    const names = declarationNameNodes(declaration);
+    const rangeNode = parent ?? declaration;
+    const scopeNode = nearestAncestorOfTypes(declaration, [
+      'compound_stmt',
+      'macro_func_body',
+      'lambda_body',
+      'ct_stmt_body',
+    ]);
+    const scopeRange = rangeFromNode(scopeNode ?? scopeRoot);
+
+    for (const nameNode of names) {
+      symbols.push(
+        createSymbol(
+          doc,
+          rangeNode,
+          nameNode,
+          moduleName,
+          SymbolKind.Variable,
+          {
+            signature: declarationSignature(rangeNode),
+            returnType: declaration.childForFieldName('type')?.text,
+            scopeRange,
+          },
+        ),
+      );
+    }
   }
 
   return symbols;
@@ -499,6 +597,7 @@ function createSymbol(
     attributes?: string[];
     returnType?: string;
     parameters?: string[];
+    scopeRange?: Range;
   },
 ): C3Symbol {
   return {
@@ -514,6 +613,7 @@ function createSymbol(
     attributes: options.attributes ?? attributesFor(node),
     returnType: options.returnType,
     parameters: options.parameters ?? [],
+    scopeRange: options.scopeRange,
     children: options.children ?? [],
   };
 }
@@ -737,6 +837,20 @@ function findFirstDescendantOfTypes(
   for (const child of node.namedChildren) {
     const found = findFirstDescendantOfTypes(child, types);
     if (found) return found;
+  }
+
+  return null;
+}
+
+function nearestAncestorOfTypes(
+  node: SyntaxNode,
+  types: string[],
+): SyntaxNode | null {
+  let current = node.parent;
+
+  while (current) {
+    if (types.includes(current.type)) return current;
+    current = current.parent;
   }
 
   return null;
