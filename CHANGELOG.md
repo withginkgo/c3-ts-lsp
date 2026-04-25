@@ -4,6 +4,18 @@ All notable project changes are recorded here.
 
 ## [Unreleased]
 
+### Added
+
+- Added a structured resolver result with selected symbol, candidates, and
+  resolution status for position-aware symbol lookup.
+- Added hover and definition handling for ambiguous symbol candidates.
+
+### Changed
+
+- Made position-aware hover and definition avoid unrelated global module
+  fallback and report ambiguous imported symbols instead of silently selecting
+  the first match.
+
 ## [0.2.0] - 2026-04-25
 
 ### Added

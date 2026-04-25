@@ -157,3 +157,125 @@ test('ProjectIndex does not resolve parameters from unrelated scopes by position
     undefined,
   );
 });
+
+test('ProjectIndex returns resolve result with selected symbol', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = ['module app;', 'fn void connect() {}', ''].join('\n');
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+
+  index.upsert(parseSource(uri, source));
+
+  const result = index.resolveSymbol(
+    uri,
+    'connect',
+    doc.positionAt(source.indexOf('connect')),
+  );
+
+  assert.equal(result.reason, 'resolved');
+  assert.equal(result.selected?.name, 'connect');
+  assert.equal(result.candidates.length, 1);
+});
+
+test('ProjectIndex reports ambiguous imported symbols', () => {
+  const index = new ProjectIndex();
+  const appUri = 'file:///workspace/app.c3';
+  const oneUri = 'file:///workspace/lib/one.c3';
+  const twoUri = 'file:///workspace/lib/two.c3';
+
+  const appSource = [
+    'module app;',
+    'import lib::one;',
+    'import lib::two;',
+    'fn void use() {',
+    '    connect();',
+    '}',
+    '',
+  ].join('\n');
+
+  index.upsert(parseSource(appUri, appSource), false);
+  index.upsert(
+    parseSource(oneUri, 'module lib::one;\nfn void connect() {}\n'),
+    false,
+  );
+  index.upsert(
+    parseSource(twoUri, 'module lib::two;\nfn void connect() {}\n'),
+    false,
+  );
+  index.rebuild();
+
+  const doc = TextDocument.create(appUri, 'c3', 1, appSource);
+  const result = index.resolveSymbol(
+    appUri,
+    'connect',
+    doc.positionAt(appSource.indexOf('connect();')),
+  );
+
+  assert.equal(result.reason, 'ambiguous');
+  assert.equal(result.selected, undefined);
+  assert.equal(result.candidates.length, 2);
+});
+
+test('ProjectIndex prefers current module symbols over imported candidates', () => {
+  const index = new ProjectIndex();
+  const appUri = 'file:///workspace/app.c3';
+  const netUri = 'file:///workspace/lib/net.c3';
+  const appSource = [
+    'module app;',
+    'import lib::net;',
+    'fn void connect() {}',
+    'fn void use() {',
+    '    connect();',
+    '}',
+    '',
+  ].join('\n');
+  const doc = TextDocument.create(appUri, 'c3', 1, appSource);
+
+  index.upsert(parseSource(appUri, appSource), false);
+  index.upsert(
+    parseSource(netUri, 'module lib::net;\nfn void connect() {}\n'),
+    false,
+  );
+  index.rebuild();
+
+  const result = index.resolveSymbol(
+    appUri,
+    'connect',
+    doc.positionAt(appSource.lastIndexOf('connect();')),
+  );
+
+  assert.equal(result.reason, 'resolved');
+  assert.equal(result.selected?.uri, appUri);
+  assert.equal(result.candidates.length, 1);
+});
+
+test('ProjectIndex position-aware resolver ignores unrelated global symbols', () => {
+  const index = new ProjectIndex();
+  const appUri = 'file:///workspace/app.c3';
+  const netUri = 'file:///workspace/lib/net.c3';
+  const appSource = [
+    'module app;',
+    'fn void use() {',
+    '    connect();',
+    '}',
+    '',
+  ].join('\n');
+  const doc = TextDocument.create(appUri, 'c3', 1, appSource);
+
+  index.upsert(parseSource(appUri, appSource), false);
+  index.upsert(
+    parseSource(netUri, 'module lib::net;\nfn void connect() {}\n'),
+    false,
+  );
+  index.rebuild();
+
+  const result = index.resolveSymbol(
+    appUri,
+    'connect',
+    doc.positionAt(appSource.indexOf('connect();')),
+  );
+
+  assert.equal(result.reason, 'not_found');
+  assert.equal(result.selected, undefined);
+  assert.equal(result.candidates.length, 0);
+});

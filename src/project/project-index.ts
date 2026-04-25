@@ -4,7 +4,12 @@ import {
   type Range,
 } from 'vscode-languageserver/node.js';
 
-import type { C3Symbol, ModuleIndex, ParsedDocument } from '../shared/types.js';
+import type {
+  C3Symbol,
+  ModuleIndex,
+  ParsedDocument,
+  ResolveResult,
+} from '../shared/types.js';
 
 export class ProjectIndex {
   private readonly parsedByUri = new Map<string, ParsedDocument>();
@@ -101,28 +106,61 @@ export class ProjectIndex {
     return undefined;
   }
 
+  resolveSymbol(
+    currentUri: string,
+    ref: string,
+    position: Position,
+  ): ResolveResult {
+    const current = this.parsedByUri.get(currentUri);
+    if (!current) return { candidates: [], reason: 'not_found' };
+
+    if (ref.includes('::')) {
+      return resultFromCandidates(this.qualifiedSymbolCandidates(current, ref));
+    }
+
+    const declared = findDeclaredSymbolAt(current.symbols, ref, position);
+    if (declared) return resultFromCandidates([declared]);
+
+    const scoped = findScopedSymbolAt(current.scopedSymbols, ref, position);
+    if (scoped) return resultFromCandidates([scoped]);
+
+    const moduleCandidates = this.visibleModuleSymbolCandidates(current, ref);
+    if (moduleCandidates.length > 0) {
+      return resultFromCandidates(moduleCandidates);
+    }
+
+    return resultFromCandidates(
+      this.visibleUnqualifiedNestedCandidates(current, ref),
+    );
+  }
+
   findSymbolAt(
     currentUri: string,
     ref: string,
     position: Position,
   ): C3Symbol | undefined {
-    const current = this.parsedByUri.get(currentUri);
-    if (!current) return undefined;
+    return this.resolveSymbol(currentUri, ref, position).selected;
+  }
 
-    if (ref.includes('::')) {
-      return this.resolveQualifiedSymbol(current, ref);
+  private visibleModuleSymbolCandidates(
+    current: ParsedDocument,
+    ref: string,
+  ): C3Symbol[] {
+    const currentModule = this.modulesByName.get(current.moduleName);
+    const local = currentModule?.symbols.get(ref) ?? [];
+
+    if (local.length > 0) return local;
+
+    const imported: C3Symbol[] = [];
+
+    if (currentModule) {
+      for (const imp of currentModule.imports) {
+        const importedModule = this.modulesByName.get(imp);
+        imported.push(...(importedModule?.symbols.get(ref) ?? []));
+      }
     }
 
-    const declared = findDeclaredSymbolAt(current.symbols, ref, position);
-    if (declared) return declared;
-
-    const scoped = findScopedSymbolAt(current.scopedSymbols, ref, position);
-    if (scoped) return scoped;
-
-    const moduleSymbol = this.findVisibleModuleSymbol(current, ref);
-    if (moduleSymbol) return moduleSymbol;
-
-    return this.findVisibleUnqualifiedNestedSymbol(current, ref);
+    return imported;
   }
 
   resolveModuleFromPrefix(
@@ -154,92 +192,70 @@ export class ProjectIndex {
     current: ParsedDocument,
     ref: string,
   ): C3Symbol | undefined {
+    return this.qualifiedSymbolCandidates(current, ref)[0];
+  }
+
+  private qualifiedSymbolCandidates(
+    current: ParsedDocument,
+    ref: string,
+  ): C3Symbol[] {
     const parts = ref.split('::');
 
-    if (parts.length < 2) return undefined;
+    if (parts.length < 2) return [];
 
     const symbolName = parts[parts.length - 1];
     const modulePrefix = parts.slice(0, -1).join('::');
 
     const directModule = this.modulesByName.get(modulePrefix);
-    const direct = directModule?.allSymbols.get(symbolName)?.[0];
+    const direct = directModule?.allSymbols.get(symbolName) ?? [];
 
-    if (direct) return direct;
+    if (direct.length > 0) return direct;
 
     const currentModule = this.modulesByName.get(current.moduleName);
 
     if (currentModule) {
+      const imported: C3Symbol[] = [];
+
       for (const imp of currentModule.imports) {
         const lastSegment = imp.split('::').at(-1);
 
         if (lastSegment === modulePrefix) {
           const importedModule = this.modulesByName.get(imp);
-          const found = importedModule?.allSymbols.get(symbolName)?.[0];
-
-          if (found) return found;
+          imported.push(...(importedModule?.allSymbols.get(symbolName) ?? []));
         }
       }
+
+      if (imported.length > 0) return imported;
     }
 
     const relativeModuleName = `${current.moduleName}::${modulePrefix}`;
     const relativeModule = this.modulesByName.get(relativeModuleName);
-    const relative = relativeModule?.allSymbols.get(symbolName)?.[0];
-
-    if (relative) return relative;
-
-    return undefined;
+    return relativeModule?.allSymbols.get(symbolName) ?? [];
   }
 
-  private findVisibleModuleSymbol(
+  private visibleUnqualifiedNestedCandidates(
     current: ParsedDocument,
     ref: string,
-  ): C3Symbol | undefined {
-    const currentModule = this.modulesByName.get(current.moduleName);
-    const local = currentModule?.symbols.get(ref)?.[0];
-
-    if (local) return local;
-
-    if (currentModule) {
-      for (const imp of currentModule.imports) {
-        const importedModule = this.modulesByName.get(imp);
-        const imported = importedModule?.symbols.get(ref)?.[0];
-
-        if (imported) return imported;
-      }
-    }
-
-    for (const mod of this.modulesByName.values()) {
-      const found = mod.symbols.get(ref)?.[0];
-      if (found) return found;
-    }
-
-    return undefined;
-  }
-
-  private findVisibleUnqualifiedNestedSymbol(
-    current: ParsedDocument,
-    ref: string,
-  ): C3Symbol | undefined {
+  ): C3Symbol[] {
     const currentModule = this.modulesByName.get(current.moduleName);
     const local = findUnqualifiedNestedUsageSymbol(currentModule, ref);
 
-    if (local) return local;
+    if (local) return [local];
 
     if (currentModule) {
+      const importedCandidates: C3Symbol[] = [];
+
       for (const imp of currentModule.imports) {
         const importedModule = this.modulesByName.get(imp);
         const imported = findUnqualifiedNestedUsageSymbol(importedModule, ref);
 
-        if (imported) return imported;
+        if (imported) importedCandidates.push(imported);
       }
+
+      if (importedCandidates.length > 0) return importedCandidates;
     }
 
-    for (const mod of this.modulesByName.values()) {
-      const found = findUnqualifiedNestedUsageSymbol(mod, ref);
-      if (found) return found;
-    }
-
-    return undefined;
+    return [];
   }
 }
 
@@ -343,4 +359,23 @@ function rangeSize(range: Range): number {
     range.end.character -
     range.start.character
   );
+}
+
+function resultFromCandidates(candidates: C3Symbol[]): ResolveResult {
+  if (candidates.length === 0) {
+    return { candidates: [], reason: 'not_found' };
+  }
+
+  if (candidates.length === 1) {
+    return {
+      selected: candidates[0],
+      candidates,
+      reason: 'resolved',
+    };
+  }
+
+  return {
+    candidates,
+    reason: 'ambiguous',
+  };
 }

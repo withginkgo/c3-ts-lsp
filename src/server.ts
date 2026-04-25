@@ -22,6 +22,7 @@ import { wordAtPosition } from './lsp/document-refs.js';
 import { documentSymbols } from './lsp/document-symbols.js';
 import { parseSource } from './parser/c3-parser.js';
 import { ProjectIndex } from './project/project-index.js';
+import type { C3Symbol, ResolveResult } from './shared/types.js';
 import { scanWorkspace } from './workspace/scan.js';
 
 const hasTransportArg = process.argv.slice(2).some((arg) => {
@@ -98,42 +99,36 @@ connection.onHover((params): Hover | null => {
   const word = wordAtPosition(doc, params.position);
   if (!word) return null;
 
-  const symbol = projectIndex.findSymbolAt(
+  const result = projectIndex.resolveSymbol(
     params.textDocument.uri,
     word,
     params.position,
   );
-  if (!symbol) return null;
 
-  return {
-    contents: {
-      kind: MarkupKind.Markdown,
-      value: [
-        '```c3',
-        symbol.signature,
-        '```',
-        '',
-        `module: \`${symbol.moduleName || '<unknown>'}\``,
-      ].join('\n'),
-    },
-  };
+  return hoverFromResolveResult(result);
 });
 
-connection.onDefinition((params): Location | null => {
+connection.onDefinition((params): Location | Location[] | null => {
   const doc = documents.get(params.textDocument.uri);
   if (!doc) return null;
 
   const word = wordAtPosition(doc, params.position);
   if (!word) return null;
 
-  const symbol = projectIndex.findSymbolAt(
+  const result = projectIndex.resolveSymbol(
     params.textDocument.uri,
     word,
     params.position,
   );
+
+  if (result.reason === 'ambiguous') {
+    return result.candidates.map(symbolLocation);
+  }
+
+  const symbol = result.selected;
   if (!symbol) return null;
 
-  return Location.create(symbol.uri, symbol.selectionRange);
+  return symbolLocation(symbol);
 });
 
 connection.onCompletion((params) => {
@@ -181,6 +176,53 @@ function publishDiagnostics(parsed: ReturnType<typeof parseSource>): void {
     uri: parsed.uri,
     diagnostics: parsed.diagnostics,
   });
+}
+
+function hoverFromResolveResult(result: ResolveResult): Hover | null {
+  if (result.selected) {
+    return symbolHover(result.selected);
+  }
+
+  if (result.reason === 'ambiguous') {
+    return ambiguousHover(result.candidates);
+  }
+
+  return null;
+}
+
+function symbolHover(symbol: C3Symbol): Hover {
+  return {
+    contents: {
+      kind: MarkupKind.Markdown,
+      value: [
+        '```c3',
+        symbol.signature,
+        '```',
+        '',
+        `module: \`${symbol.moduleName || '<unknown>'}\``,
+      ].join('\n'),
+    },
+  };
+}
+
+function ambiguousHover(candidates: C3Symbol[]): Hover {
+  return {
+    contents: {
+      kind: MarkupKind.Markdown,
+      value: [
+        `Ambiguous symbol: ${candidates.length} candidates`,
+        '',
+        ...candidates.map(
+          (symbol) =>
+            `- \`${symbol.moduleName || '<unknown>'}\`: \`${symbol.signature}\``,
+        ),
+      ].join('\n'),
+    },
+  };
+}
+
+function symbolLocation(symbol: C3Symbol): Location {
+  return Location.create(symbol.uri, symbol.selectionRange);
 }
 
 function resolveWorkspaceRoot(params: InitializeParams): string | null {

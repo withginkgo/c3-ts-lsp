@@ -39,3 +39,9 @@ export type ParsedDocument = {
   imports: string[];
   diagnostics: Diagnostic[];
 };
+
+export type ResolveResult = {
+  selected?: C3Symbol;
+  candidates: C3Symbol[];
+  reason: 'resolved' | 'not_found' | 'ambiguous';
+};
