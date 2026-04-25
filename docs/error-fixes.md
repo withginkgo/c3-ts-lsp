@@ -80,3 +80,26 @@ Fix:
 - Exclude legacy `public/` template assets from Git.
 - Regenerate `package-lock.json` so it matches the current `package.json`
   dependencies.
+
+### Incomplete module index typing
+
+Symptoms:
+
+```text
+Cannot find name 'moduleIndex'.
+Type '{ tree: Tree; symbols: C3Symbol[]; moduleName: string; }' is missing
+the following properties from type 'ParsedDocument': uri, imports
+```
+
+Cause:
+
+The parsed document shape had been expanded to include module index fields, but
+the module index type was not defined and `parseAndIndex` still stored the old
+document shape.
+
+Fix:
+
+- Define a `ModuleIndex` type and reuse it in `ParsedDocument`.
+- Extract top-level `import_declaration` paths into a `Set<string>`.
+- Store `uri` and `imports` when indexing each document.
+- Rebuild `modulesByName` together with the global symbol index.

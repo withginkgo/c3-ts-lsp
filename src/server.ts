@@ -33,10 +33,15 @@ type C3Symbol = {
   signature: string;
 };
 
-type ParsedDocument = {
-  tree: Tree;
+type ModuleIndex = {
+  uri: string;
   symbols: C3Symbol[];
   moduleName: string;
+  imports: Set<string>;
+};
+
+type ParsedDocument = ModuleIndex & {
+  tree: Tree;
 };
 
 const parser = new Parser();
@@ -60,6 +65,7 @@ const documents = new TextDocuments(TextDocument);
 
 const parsedByUri = new Map<string, ParsedDocument>();
 const symbolsByName = new Map<string, C3Symbol[]>();
+const modulesByName = new Map<string, ModuleIndex>();
 
 connection.onInitialize((_params: InitializeParams): InitializeResult => {
   return {
@@ -187,12 +193,15 @@ function parseAndIndex(doc: TextDocument): void {
   const tree = parser.parse(source);
 
   const moduleName = extractModuleName(tree.rootNode);
+  const imports = extractImports(tree.rootNode);
   const symbols = extractTopLevelSymbols(doc, tree.rootNode, moduleName);
 
   parsedByUri.set(doc.uri, {
+    uri: doc.uri,
     tree,
     symbols,
     moduleName,
+    imports,
   });
 
   rebuildGlobalIndex();
@@ -211,6 +220,21 @@ function extractModuleName(root: SyntaxNode): string {
 
   const path = moduleDecl.childForFieldName("path");
   return path?.text ?? "";
+}
+
+function extractImports(root: SyntaxNode): Set<string> {
+  const imports = new Set<string>();
+
+  for (let i = 0; i < root.namedChildCount; i++) {
+    const child = root.namedChild(i);
+    if (!child || child.type !== "import_declaration") continue;
+
+    const importPath = findFirstDescendantOfType(child, "import_path");
+    const importName = importPath?.text.trim();
+    if (importName) imports.add(importName);
+  }
+
+  return imports;
 }
 
 function extractTopLevelSymbols(
@@ -361,8 +385,18 @@ function findFirstDescendantOfTypes(
 
 function rebuildGlobalIndex(): void {
   symbolsByName.clear();
+  modulesByName.clear();
 
   for (const parsed of parsedByUri.values()) {
+    if (parsed.moduleName) {
+      modulesByName.set(parsed.moduleName, {
+        uri: parsed.uri,
+        symbols: parsed.symbols,
+        moduleName: parsed.moduleName,
+        imports: parsed.imports,
+      });
+    }
+
     for (const sym of parsed.symbols) {
       const arr = symbolsByName.get(sym.name) ?? [];
       arr.push(sym);
