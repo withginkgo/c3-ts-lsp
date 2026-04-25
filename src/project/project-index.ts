@@ -104,16 +104,34 @@ export class ProjectIndex {
     receiverRef: string,
     position: Position,
   ): C3Symbol[] {
+    return this.memberSymbolsForExpression(currentUri, receiverRef, position);
+  }
+
+  memberSymbolsForExpression(
+    currentUri: string,
+    receiverExpression: string,
+    position: Position,
+  ): C3Symbol[] {
     const current = this.parsedByUri.get(currentUri);
     if (!current) return [];
 
-    const receiver = this.resolveSymbol(
-      currentUri,
-      receiverRef,
+    const typeName = this.expressionTypeNameFromText(
+      current,
+      receiverExpression,
       position,
-    ).selected;
-    const typeName = receiver?.returnType;
+    );
     if (!typeName) return [];
+
+    return this.membersForTypeName(current, typeName, position);
+  }
+
+  memberSymbolsForType(
+    currentUri: string,
+    typeName: string,
+    position: Position,
+  ): C3Symbol[] {
+    const current = this.parsedByUri.get(currentUri);
+    if (!current) return [];
 
     return this.membersForTypeName(current, typeName, position);
   }
@@ -164,7 +182,14 @@ export class ProjectIndex {
     }
 
     if (ref.includes('::')) {
-      return resultFromCandidates(this.qualifiedSymbolCandidates(current, ref));
+      return resultFromCandidates(
+        this.overloadCandidatesAt(
+          current,
+          ref,
+          position,
+          this.qualifiedSymbolCandidates(current, ref),
+        ),
+      );
     }
 
     const declared = findDeclaredSymbolAt(current.symbols, ref, position);
@@ -175,7 +200,9 @@ export class ProjectIndex {
 
     const moduleCandidates = this.visibleModuleSymbolCandidates(current, ref);
     if (moduleCandidates.length > 0) {
-      return resultFromCandidates(moduleCandidates);
+      return resultFromCandidates(
+        this.overloadCandidatesAt(current, ref, position, moduleCandidates),
+      );
     }
 
     return resultFromCandidates(
@@ -207,6 +234,12 @@ export class ProjectIndex {
 
       for (const ref of memberReferenceNodes(parsed.tree.rootNode)) {
         this.addReferenceLocation(parsed, ref, target, locations);
+      }
+
+      if (isTypeSymbol(target)) {
+        for (const ref of typeReferenceNodes(parsed.tree.rootNode)) {
+          this.addTypeReferenceLocation(parsed, ref, target, locations);
+        }
       }
     }
 
@@ -378,6 +411,9 @@ export class ProjectIndex {
     expression: SyntaxNode,
     position: Position,
   ): string | undefined {
+    const literalType = literalTypeName(expression);
+    if (literalType) return literalType;
+
     if (expression.type === 'ident_expr') {
       const resolved = this.resolveSymbol(
         current.uri,
@@ -386,6 +422,17 @@ export class ProjectIndex {
       ).selected;
 
       return resolved?.returnType ?? symbolTypeName(resolved);
+    }
+
+    if (expression.type === 'call_expr') {
+      const functionNode = expression.childForFieldName('function');
+      if (!functionNode) return undefined;
+
+      return this.expressionTypeName(
+        current,
+        functionNode,
+        rangeFromNode(functionNode).start,
+      );
     }
 
     if (expression.type === 'field_expr') {
@@ -401,7 +448,184 @@ export class ProjectIndex {
       return member?.returnType;
     }
 
+    if (expression.type === 'subscript_expr') {
+      const argument = expression.childForFieldName('argument');
+      if (!argument) return undefined;
+
+      const indexedType = this.expressionTypeName(current, argument, position);
+      return indexedType ? elementTypeName(indexedType) : undefined;
+    }
+
+    if (expression.type === 'paren_expr') {
+      const inner = expression.namedChildren[0];
+      return inner ? this.expressionTypeName(current, inner, position) : undefined;
+    }
+
+    if (expression.type === 'unary_expr') {
+      const argument = expression.childForFieldName('argument');
+      if (!argument) return undefined;
+
+      const argumentType = this.expressionTypeName(current, argument, position);
+      if (!argumentType) return undefined;
+
+      const text = expression.text.trim();
+      if (text.startsWith('&')) return `${normalizeTypeName(argumentType)}*`;
+      if (text.startsWith('*')) return normalizeTypeName(argumentType);
+
+      return argumentType;
+    }
+
+    if (expression.type === 'cast_expr') {
+      const typeNode = expression.childForFieldName('type');
+      if (typeNode) return typeNode.text;
+    }
+
     return undefined;
+  }
+
+  private expressionTypeNameFromText(
+    current: ParsedDocument,
+    expressionText: string,
+    position: Position,
+  ): string | undefined {
+    const parts = splitMemberExpression(expressionText);
+    if (parts.length === 0) {
+      return this.expressionTypeNameAtPosition(current, position);
+    }
+
+    let typeName = this.baseExpressionTypeNameFromText(
+      current,
+      parts[0],
+      position,
+    );
+
+    for (const part of parts.slice(1)) {
+      if (!typeName) return undefined;
+
+      const memberAccess = parseMemberSegment(part);
+      if (!memberAccess) return undefined;
+
+      const member = this.membersForTypeName(current, typeName, position).find(
+        (candidate) => candidate.name === memberAccess.name,
+      );
+
+      typeName = member?.returnType;
+
+      if (typeName && memberAccess.indexed) {
+        typeName = elementTypeName(typeName);
+      }
+    }
+
+    return typeName ?? this.expressionTypeNameAtPosition(current, position);
+  }
+
+  private expressionTypeNameAtPosition(
+    current: ParsedDocument,
+    position: Position,
+  ): string | undefined {
+    const node = nodeAtOrBeforePosition(current.tree.rootNode, position);
+    if (!node) return undefined;
+
+    const expression = nearestExpressionNode(node);
+    if (!expression) return undefined;
+
+    return this.expressionTypeName(current, expression, rangeFromNode(node).start);
+  }
+
+  private baseExpressionTypeNameFromText(
+    current: ParsedDocument,
+    expressionText: string,
+    position: Position,
+  ): string | undefined {
+    const text = stripOuterParens(expressionText.trim());
+    if (!text) return undefined;
+
+    if (text.startsWith('&')) {
+      const innerType = this.baseExpressionTypeNameFromText(
+        current,
+        text.slice(1),
+        position,
+      );
+      return innerType ? `${normalizeTypeName(innerType)}*` : undefined;
+    }
+
+    if (text.startsWith('*')) {
+      const innerType = this.baseExpressionTypeNameFromText(
+        current,
+        text.slice(1),
+        position,
+      );
+      return innerType ? normalizeTypeName(innerType) : undefined;
+    }
+
+    const subscript = splitTrailingSubscript(text);
+    if (subscript) {
+      const baseType = this.baseExpressionTypeNameFromText(
+        current,
+        subscript.base,
+        position,
+      );
+      return baseType ? elementTypeName(baseType) : undefined;
+    }
+
+    const call = splitCallExpression(text);
+    if (call) {
+      return this.resolveSymbol(current.uri, call.functionRef, position).selected
+        ?.returnType;
+    }
+
+    if (isReferenceText(text)) {
+      const resolved = this.resolveSymbol(current.uri, text, position).selected;
+      return (
+        resolved?.returnType ??
+        symbolTypeName(resolved) ??
+        recoverableLocalTypeName(current, text, position)
+      );
+    }
+
+    return undefined;
+  }
+
+  private overloadCandidatesAt(
+    current: ParsedDocument,
+    ref: string,
+    position: Position,
+    candidates: C3Symbol[],
+  ): C3Symbol[] {
+    if (candidates.length <= 1) return candidates;
+
+    const call = callExpressionAt(current, ref, position);
+    if (!call) return candidates;
+
+    const overloads = candidates.filter(
+      (candidate) =>
+        candidate.kind === SymbolKind.Function ||
+        candidate.kind === SymbolKind.Method,
+    );
+
+    if (overloads.length <= 1) return candidates;
+
+    const args = callArgumentNodes(call);
+    const sameArity = overloads.filter(
+      (candidate) => parameterTypes(candidate).length === args.length,
+    );
+
+    if (sameArity.length === 0) return candidates;
+    if (sameArity.length === 1) return sameArity;
+
+    const argTypes = args.map((arg) =>
+      this.expressionTypeName(current, arg, rangeFromNode(arg).start),
+    );
+
+    if (argTypes.some((argType) => !argType)) return sameArity;
+
+    const typed = sameArity.filter((candidate) =>
+      parameterTypes(candidate).every((paramType, index) =>
+        typesCompatible(argTypes[index], paramType),
+      ),
+    );
+
+    return typed.length > 0 ? typed : sameArity;
   }
 
   private membersForTypeName(
@@ -507,6 +731,23 @@ export class ProjectIndex {
 
     if (resolved && sameSymbol(resolved, target)) {
       locations.push(Location.create(parsed.uri, rangeFromNode(ref)));
+    }
+  }
+
+  private addTypeReferenceLocation(
+    parsed: ParsedDocument,
+    ref: SyntaxNode,
+    target: C3Symbol,
+    locations: Location[],
+  ): void {
+    const resolved = this.resolveTypeSymbol(
+      parsed,
+      ref.text,
+      rangeFromNode(ref).start,
+    );
+
+    if (resolved && sameSymbol(resolved, target)) {
+      locations.push(Location.create(parsed.uri, typeReferenceRange(ref)));
     }
   }
 }
@@ -644,6 +885,124 @@ function rangeSize(range: Range): number {
   );
 }
 
+function nodeAtOrBeforePosition(
+  root: SyntaxNode,
+  position: Position,
+): SyntaxNode | null {
+  const current = root.descendantForPosition({
+    row: position.line,
+    column: Math.max(0, position.character),
+  });
+
+  if (current.type !== 'source_file') return current;
+
+  if (position.character === 0) return current;
+
+  return root.descendantForPosition({
+    row: position.line,
+    column: position.character - 1,
+  });
+}
+
+function nearestExpressionNode(node: SyntaxNode | null): SyntaxNode | undefined {
+  let current = node;
+
+  while (current) {
+    if (expressionNodeTypes.has(current.type)) return current;
+    current = current.parent;
+  }
+
+  return undefined;
+}
+
+const expressionNodeTypes = new Set([
+  'ident_expr',
+  'call_expr',
+  'field_expr',
+  'subscript_expr',
+  'paren_expr',
+  'unary_expr',
+  'cast_expr',
+]);
+
+function callExpressionAt(
+  current: ParsedDocument,
+  ref: string,
+  position: Position,
+): SyntaxNode | undefined {
+  const node = current.tree.rootNode.descendantForPosition({
+    row: position.line,
+    column: position.character,
+  });
+  const identExpr = ancestorOfType(node, 'ident_expr');
+  if (!identExpr || identExpr.text !== ref) return undefined;
+
+  const call = ancestorOfType(identExpr, 'call_expr');
+  if (!call) return undefined;
+
+  const functionNode = call.childForFieldName('function');
+  if (
+    !functionNode ||
+    functionNode.startIndex !== identExpr.startIndex ||
+    functionNode.endIndex !== identExpr.endIndex
+  ) {
+    return undefined;
+  }
+
+  return call;
+}
+
+function callArgumentNodes(call: SyntaxNode): SyntaxNode[] {
+  const args = call.childForFieldName('arguments');
+  if (!args) return [];
+
+  return args.namedChildren.flatMap((arg) => {
+    if (arg.type !== 'call_arg') return [arg];
+    return arg.namedChildren.length > 0 ? [arg.namedChildren.at(-1)!] : [];
+  });
+}
+
+function parameterTypes(symbol: C3Symbol): string[] {
+  const childTypes = symbol.children
+    .map((child) => child.returnType)
+    .filter((type): type is string => !!type);
+
+  if (childTypes.length > 0) return childTypes;
+
+  return symbol.parameters.flatMap((parameter) => {
+    const parts = parameter.trim().split(/\s+/);
+    return parts.length > 1 ? [parts.slice(0, -1).join(' ')] : [];
+  });
+}
+
+function typesCompatible(
+  actual: string | undefined,
+  expected: string | undefined,
+): boolean {
+  if (!actual || !expected) return false;
+
+  return normalizeTypeName(actual) === normalizeTypeName(expected);
+}
+
+function literalTypeName(node: SyntaxNode): string | undefined {
+  switch (node.type) {
+    case 'integer_literal':
+      return 'int';
+    case 'real_literal':
+      return 'float';
+    case 'char_literal':
+      return 'char';
+    case 'string_literal':
+      return 'String';
+    case 'true':
+    case 'false':
+    case 'boolean_literal':
+      return 'bool';
+    default:
+      return undefined;
+  }
+}
+
 function resultFromCandidates(candidates: C3Symbol[]): ResolveResult {
   const orderedCandidates = [...candidates].sort(compareSymbols);
 
@@ -768,8 +1127,185 @@ function rangeFromNode(node: SyntaxNode): Range {
   );
 }
 
+function typeReferenceRange(node: SyntaxNode): Range {
+  const typeName = lastDescendantOfTypes(node, ['type_ident', 'ident']);
+  return typeName ? rangeFromNode(typeName) : rangeFromNode(node);
+}
+
+function splitMemberExpression(expressionText: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let start = 0;
+
+  for (let index = 0; index < expressionText.length; index++) {
+    const char = expressionText[index];
+
+    if (char === '(' || char === '[' || char === '{') depth++;
+    if (char === ')' || char === ']' || char === '}') depth--;
+
+    if (char === '.' && depth === 0) {
+      const part = expressionText.slice(start, index).trim();
+      if (part) parts.push(part);
+      start = index + 1;
+    }
+  }
+
+  const tail = expressionText.slice(start).trim();
+  if (tail) parts.push(tail);
+
+  return parts;
+}
+
+function parseMemberSegment(
+  segment: string,
+): { name: string; indexed: boolean } | undefined {
+  const text = segment.trim();
+  const call = splitCallExpression(text);
+  const indexed = !!splitTrailingSubscript(call?.functionRef ?? text);
+  const base = splitTrailingSubscript(call?.functionRef ?? text)?.base ?? text;
+  const name = base.match(/^[A-Za-z_$@][A-Za-z0-9_$@]*/)?.[0];
+
+  return name ? { name, indexed } : undefined;
+}
+
+function splitTrailingSubscript(
+  text: string,
+): { base: string; indexText: string } | undefined {
+  if (!text.endsWith(']')) return undefined;
+
+  let depth = 0;
+
+  for (let index = text.length - 1; index >= 0; index--) {
+    const char = text[index];
+
+    if (char === ']') depth++;
+    if (char === '[') depth--;
+
+    if (char === '[' && depth === 0) {
+      return {
+        base: text.slice(0, index).trim(),
+        indexText: text.slice(index + 1, -1),
+      };
+    }
+  }
+
+  return undefined;
+}
+
+function splitCallExpression(
+  text: string,
+): { functionRef: string; argsText: string } | undefined {
+  if (!text.endsWith(')')) return undefined;
+
+  let depth = 0;
+
+  for (let index = text.length - 1; index >= 0; index--) {
+    const char = text[index];
+
+    if (char === ')') depth++;
+    if (char === '(') depth--;
+
+    if (char === '(' && depth === 0) {
+      const functionRef = text.slice(0, index).trim();
+      if (!functionRef) return undefined;
+
+      return {
+        functionRef,
+        argsText: text.slice(index + 1, -1),
+      };
+    }
+  }
+
+  return undefined;
+}
+
+function stripOuterParens(text: string): string {
+  let current = text;
+
+  while (
+    current.startsWith('(') &&
+    current.endsWith(')') &&
+    matchingOuterParens(current)
+  ) {
+    current = current.slice(1, -1).trim();
+  }
+
+  return current;
+}
+
+function matchingOuterParens(text: string): boolean {
+  let depth = 0;
+
+  for (let index = 0; index < text.length; index++) {
+    const char = text[index];
+
+    if (char === '(') depth++;
+    if (char === ')') depth--;
+
+    if (depth === 0 && index < text.length - 1) return false;
+  }
+
+  return depth === 0;
+}
+
+function isReferenceText(text: string): boolean {
+  return /^[A-Za-z_$@][A-Za-z0-9_$@]*(?:::[A-Za-z_$@][A-Za-z0-9_$@]*)*$/.test(
+    text,
+  );
+}
+
+function recoverableLocalTypeName(
+  current: ParsedDocument,
+  ref: string,
+  position: Position,
+): string | undefined {
+  if (!/^[A-Za-z_$@][A-Za-z0-9_$@]*$/.test(ref)) return undefined;
+
+  const offset = offsetAt(current.source, position);
+  const before = current.source.slice(0, offset);
+  const escapedRef = ref.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const declaration = new RegExp(
+    String.raw`\b([A-Za-z_$@][A-Za-z0-9_$@]*(?:::[A-Za-z_$@][A-Za-z0-9_$@]*)?(?:\s*(?:\[[^\]]*\]|[*!?~]))*)\s+${escapedRef}\b`,
+    'g',
+  );
+  let match: RegExpExecArray | null;
+  let found: string | undefined;
+
+  while ((match = declaration.exec(before))) {
+    found = match[1].trim();
+  }
+
+  return found;
+}
+
+function offsetAt(source: string, position: Position): number {
+  let line = 0;
+  let character = 0;
+
+  for (let index = 0; index < source.length; index++) {
+    if (line === position.line && character === position.character) {
+      return index;
+    }
+
+    if (source[index] === '\n') {
+      line++;
+      character = 0;
+      continue;
+    }
+
+    character++;
+  }
+
+  return source.length;
+}
+
+function elementTypeName(typeName: string): string {
+  return normalizeTypeName(typeName);
+}
+
 function normalizeTypeName(typeName: string): string {
   return typeName
+    .replace(/\b(?:const|volatile)\s+/g, '')
     .replace(/\[[^\]]*\]/g, '')
     .replace(/[*!?~]+/g, '')
     .trim();
@@ -827,4 +1363,42 @@ function memberReferenceNodes(root: SyntaxNode): SyntaxNode[] {
 
   visit(root);
   return refs;
+}
+
+function typeReferenceNodes(root: SyntaxNode): SyntaxNode[] {
+  const refs: SyntaxNode[] = [];
+
+  function visit(node: SyntaxNode): void {
+    if (node.type === 'path_type_ident') {
+      refs.push(node);
+      return;
+    }
+
+    for (const child of node.namedChildren) {
+      visit(child);
+    }
+  }
+
+  visit(root);
+  return refs;
+}
+
+function lastDescendantOfTypes(
+  node: SyntaxNode,
+  types: string[],
+): SyntaxNode | undefined {
+  let found: SyntaxNode | undefined;
+
+  function visit(current: SyntaxNode): void {
+    if (types.includes(current.type)) {
+      found = current;
+    }
+
+    for (const child of current.namedChildren) {
+      visit(child);
+    }
+  }
+
+  visit(node);
+  return found;
 }

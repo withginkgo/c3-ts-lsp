@@ -52,13 +52,15 @@ function memberAccessBeforeCursor(
   const text = doc.getText();
   const offset = doc.offsetAt(position);
   const before = text.slice(0, offset);
-  const match = before.match(/([A-Za-z_$@][A-Za-z0-9_$@]*)\.$/);
+  const match = before.match(
+    /((?:[&*]\s*)?(?:\([^()\n]+\)|[A-Za-z_$@][A-Za-z0-9_$@]*(?:(?:::[A-Za-z_$@][A-Za-z0-9_$@]*)|\([^()\n]*\)|\[[^\]\n]*\]|\.[A-Za-z_$@][A-Za-z0-9_$@]*)*))\.$/,
+  );
 
   if (!match || match.index == null) return null;
 
   return {
     receiver: match[1],
-    position: doc.positionAt(match.index),
+    position: doc.positionAt(match.index + match[1].length),
   };
 }
 
@@ -117,7 +119,7 @@ function memberCompletions(
   position: Position,
 ): CompletionItem[] {
   return index
-    .memberSymbolsForReceiver(current.uri, receiver, position)
+    .memberSymbolsForExpression(current.uri, receiver, position)
     .map((symbol) => ({
       label: symbol.name,
       kind: toCompletionKind(symbol.kind),

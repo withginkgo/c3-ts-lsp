@@ -20,6 +20,12 @@ The server currently provides a working prototype:
   visibility, ambiguity, and unresolved-symbol handling.
 - Scope and member-aware hover, definition, completion, diagnostics, and
   references for parameters, locals, and struct fields.
+- Lightweight expression type inference for chained members, function call
+  return values, subscript receivers, parenthesized expressions, and simple
+  pointer-style unary expressions.
+- Basic overload narrowing by call arity and literal argument type.
+- Member completions while editing incomplete member access such as `res.`.
+- Type usage references for type declarations.
 - Semantic diagnostics for unresolved imports, unresolved module aliases,
   unresolved expression symbols, unresolved members, and ambiguous expression
   symbols.
@@ -29,9 +35,9 @@ The server currently provides a working prototype:
   completion behavior.
 
 The implementation is still intentionally lightweight. It has project/module
-resolution, basic scoped local lookup, and simple member type analysis, but it
-does not yet model overload selection, broad type relationships, rename, or
-editor packaging.
+resolution, basic scoped local lookup, simple member type analysis, and basic
+overload narrowing, but it does not yet model full C3 type relationships,
+implicit conversions, rename, or editor packaging.
 
 ## Target Architecture
 
@@ -124,7 +130,7 @@ Status: partially completed in Unreleased.
 - Resolve identifiers from inner scope to module/import scope.
 - Track basic type information for declarations and expressions.
 - Support member access, pointer/member dereference, namespace-qualified names,
-  and overload candidates.
+  and basic overload candidates.
 
 Exit criteria:
 
@@ -204,7 +210,9 @@ Exit criteria:
 
 ## Recommended Next Steps
 
-1. Replace global fallback resolution with a resolver that understands scopes
-   and imports.
-2. Add semantic diagnostics for unresolved imports and unresolved symbols.
-3. Add references and signature help after the resolver is stable.
+1. Split scope, resolver, and type inference out of `project-index.ts` once the
+   current behavior stabilizes.
+2. Add signature help using the overload candidate data already returned by the
+   resolver.
+3. Extend type analysis for implicit conversions, enum values, aliases,
+   typedefs, and method-style calls.

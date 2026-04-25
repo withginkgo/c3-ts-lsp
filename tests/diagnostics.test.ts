@@ -158,3 +158,25 @@ test('semanticDiagnostics reports ambiguous expression symbols', () => {
     ["Ambiguous symbol 'connect' (2 candidates)"],
   );
 });
+
+test('semanticDiagnostics accepts overloads resolved by literal argument types', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'fn int add(int a) { return a; }',
+      'fn float add(float a) { return a; }',
+      'fn void use() {',
+      '    add(1);',
+      '    add(1.0);',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(semanticDiagnostics(index, parsed), []);
+});

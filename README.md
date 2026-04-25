@@ -15,10 +15,14 @@ It also exposes basic diagnostics and references.
   imported modules, relative module paths, module aliases, and struct members.
 - Module-aware completions for direct, imported, relative, and aliased module
   paths.
-- Scope-aware completions for parameters, locals, and struct members.
+- Scope-aware completions for parameters, locals, chained expression receivers,
+  incomplete member access, and struct members.
+- Basic expression type analysis for member access, call return values,
+  subscript expressions, pointer-like type suffixes, and simple overload calls.
 - Syntax and basic semantic diagnostics from tree-sitter parse errors, missing
   imports, unresolved symbols, and ambiguous symbols.
-- References for declarations, scoped locals, and resolved member accesses.
+- References for declarations, type usages, scoped locals, and resolved member
+  accesses.
 
 ## Project Structure
 

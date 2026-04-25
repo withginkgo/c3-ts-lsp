@@ -17,9 +17,15 @@ All notable project changes are recorded here.
   targets, unresolved expression symbols, and ambiguous expression symbols.
 - Added member access resolution for struct members, including pointer-like
   receiver types.
+- Added basic expression type inference for chained members, call return values,
+  array/subscript receivers, parenthesized expressions, and simple unary
+  pointer-style expressions.
+- Added basic overload narrowing by call arity and literal argument type.
 - Added local, parameter, and member-aware completions.
+- Added member completions for incomplete member access such as `res.`.
 - Added an LSP references provider backed by syntax-tree references and symbol
   resolution.
+- Added type usage references for type declarations.
 
 ### Changed
 
@@ -32,6 +38,8 @@ All notable project changes are recorded here.
   changes.
 - Made hover, definition, diagnostics, and references distinguish struct
   members from unrelated top-level symbols.
+- Made member completions use the receiver expression before the cursor, so
+  existing member text after the cursor does not change the suggested members.
 
 ## [0.2.0] - 2026-04-25
 

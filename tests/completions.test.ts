@@ -114,6 +114,118 @@ test('completionItems returns struct members after member access', () => {
   );
 });
 
+test('completionItems returns members for incomplete member access', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'struct HttpResponse {',
+    '    String body;',
+    '}',
+    'fn void use() {',
+    '    HttpResponse res;',
+    '    res.',
+    '}',
+    '',
+  ].join('\n');
+  const parsed = parseSource(uri, source);
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+
+  index.upsert(parsed);
+
+  const items = completionItems(
+    index,
+    doc,
+    parsed,
+    doc.positionAt(source.indexOf('res.') + 'res.'.length),
+  );
+
+  assert.deepEqual(
+    items.map((item) => [item.label, item.kind, item.detail]),
+    [['body', CompletionItemKind.Field, 'String body;']],
+  );
+});
+
+test('completionItems returns members for chained expression receivers', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'struct Inner {',
+    '    int value;',
+    '}',
+    'struct Outer {',
+    '    Inner inner;',
+    '}',
+    'fn Outer make() {}',
+    'fn void use(Outer outer) {',
+    '    outer.inner.value;',
+    '    make().inner.value;',
+    '}',
+    '',
+  ].join('\n');
+  const parsed = parseSource(uri, source);
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+
+  index.upsert(parsed);
+
+  const localItems = completionItems(
+    index,
+    doc,
+    parsed,
+    doc.positionAt(source.indexOf('outer.inner.') + 'outer.inner.'.length),
+  );
+  const callItems = completionItems(
+    index,
+    doc,
+    parsed,
+    doc.positionAt(source.indexOf('make().inner.') + 'make().inner.'.length),
+  );
+
+  assert.deepEqual(
+    localItems.map((item) => [item.label, item.kind, item.detail]),
+    [['value', CompletionItemKind.Field, 'int value;']],
+  );
+  assert.deepEqual(
+    callItems.map((item) => [item.label, item.kind, item.detail]),
+    [['value', CompletionItemKind.Field, 'int value;']],
+  );
+});
+
+test('completionItems returns members after parenthesized unary receivers', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'struct Inner {',
+    '    int value;',
+    '}',
+    'struct Outer {',
+    '    Inner inner;',
+    '}',
+    'fn void use(Outer* pointer) {',
+    '    (*pointer).inner.value;',
+    '}',
+    '',
+  ].join('\n');
+  const parsed = parseSource(uri, source);
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+
+  index.upsert(parsed);
+
+  const items = completionItems(
+    index,
+    doc,
+    parsed,
+    doc.positionAt(source.indexOf('(*pointer).inner.') + '(*pointer).inner.'.length),
+  );
+
+  assert.deepEqual(
+    items.map((item) => [item.label, item.kind, item.detail]),
+    [['value', CompletionItemKind.Field, 'int value;']],
+  );
+});
+
 test('completionItems returns imported module members after a module prefix', () => {
   const index = new ProjectIndex();
   const appUri = 'file:///workspace/app.c3';

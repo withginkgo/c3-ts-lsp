@@ -348,6 +348,152 @@ test('ProjectIndex resolves struct members through pointer-like receiver types',
   assert.equal(result.selected?.signature, 'String body;');
 });
 
+test('ProjectIndex resolves members through parenthesized unary receivers', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'struct Inner {',
+    '    int value;',
+    '}',
+    'struct Outer {',
+    '    Inner inner;',
+    '}',
+    'fn void use(Outer* pointer, Outer value) {',
+    '    (*pointer).inner.value;',
+    '    (&value).inner.value;',
+    '}',
+    '',
+  ].join('\n');
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+
+  index.upsert(parseSource(uri, source));
+
+  const derefResult = index.resolveSymbol(
+    uri,
+    'value',
+    doc.positionAt(
+      source.indexOf('(*pointer).inner.value') + '(*pointer).inner.'.length,
+    ),
+  );
+  const addressResult = index.resolveSymbol(
+    uri,
+    'value',
+    doc.positionAt(
+      source.indexOf('(&value).inner.value') + '(&value).inner.'.length,
+    ),
+  );
+
+  assert.equal(derefResult.reason, 'resolved');
+  assert.equal(derefResult.selected?.signature, 'int value;');
+  assert.equal(addressResult.reason, 'resolved');
+  assert.equal(addressResult.selected?.signature, 'int value;');
+});
+
+test('ProjectIndex resolves chained member expressions', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'struct Inner {',
+    '    int value;',
+    '}',
+    'struct Outer {',
+    '    Inner inner;',
+    '}',
+    'fn void use(Outer outer) {',
+    '    outer.inner.value;',
+    '}',
+    '',
+  ].join('\n');
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+
+  index.upsert(parseSource(uri, source));
+
+  const result = index.resolveSymbol(
+    uri,
+    'value',
+    doc.positionAt(source.lastIndexOf('value')),
+  );
+
+  assert.equal(result.reason, 'resolved');
+  assert.equal(result.selected?.signature, 'int value;');
+});
+
+test('ProjectIndex resolves members on call and subscript expression receivers', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'struct Inner {',
+    '    int value;',
+    '}',
+    'struct Outer {',
+    '    Inner inner;',
+    '    Inner[] items;',
+    '}',
+    'fn Outer make() {}',
+    'fn void use(Outer outer) {',
+    '    make().inner.value;',
+    '    outer.items[0].value;',
+    '}',
+    '',
+  ].join('\n');
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+
+  index.upsert(parseSource(uri, source));
+
+  const callResult = index.resolveSymbol(
+    uri,
+    'value',
+    doc.positionAt(source.indexOf('value')),
+  );
+  const subscriptResult = index.resolveSymbol(
+    uri,
+    'value',
+    doc.positionAt(source.lastIndexOf('value')),
+  );
+
+  assert.equal(callResult.reason, 'resolved');
+  assert.equal(callResult.selected?.signature, 'int value;');
+  assert.equal(subscriptResult.reason, 'resolved');
+  assert.equal(subscriptResult.selected?.signature, 'int value;');
+});
+
+test('ProjectIndex selects basic overloads by argument type', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'fn int add(int a) { return a; }',
+    'fn float add(float a) { return a; }',
+    'fn void use() {',
+    '    add(1);',
+    '    add(1.0);',
+    '}',
+    '',
+  ].join('\n');
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+
+  index.upsert(parseSource(uri, source));
+
+  const intResult = index.resolveSymbol(
+    uri,
+    'add',
+    doc.positionAt(source.indexOf('add(1);')),
+  );
+  const floatResult = index.resolveSymbol(
+    uri,
+    'add',
+    doc.positionAt(source.indexOf('add(1.0);')),
+  );
+
+  assert.equal(intResult.reason, 'resolved');
+  assert.equal(intResult.selected?.signature, 'int add(int a)');
+  assert.equal(floatResult.reason, 'resolved');
+  assert.equal(floatResult.selected?.signature, 'float add(float a)');
+});
+
 test('ProjectIndex exposes visible scoped symbols at a position', () => {
   const index = new ProjectIndex();
   const uri = 'file:///workspace/app.c3';
@@ -373,6 +519,48 @@ test('ProjectIndex exposes visible scoped symbols at a position', () => {
     [
       ['count', 'int count;'],
       ['path', 'String path'],
+    ],
+  );
+});
+
+test('ProjectIndex includes type usages in references', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'struct HttpResponse {',
+    '    String body;',
+    '}',
+    'fn void use(HttpResponse response) {',
+    '    HttpResponse local;',
+    '}',
+    '',
+  ].join('\n');
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+
+  index.upsert(parseSource(uri, source));
+
+  const symbol = index.resolveSymbol(
+    uri,
+    'HttpResponse',
+    doc.positionAt(source.indexOf('HttpResponse')),
+  ).selected;
+
+  assert.deepEqual(
+    symbol ? index.referencesTo(symbol).map((location) => location.range) : [],
+    [
+      {
+        start: { line: 1, character: 7 },
+        end: { line: 1, character: 19 },
+      },
+      {
+        start: { line: 4, character: 12 },
+        end: { line: 4, character: 24 },
+      },
+      {
+        start: { line: 5, character: 4 },
+        end: { line: 5, character: 16 },
+      },
     ],
   );
 });

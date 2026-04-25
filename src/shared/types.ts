@@ -48,6 +48,7 @@ export type ModuleIndex = {
 
 export type ParsedDocument = {
   uri: string;
+  source: string;
   tree: Tree;
   symbols: C3Symbol[];
   scopedSymbols: C3Symbol[];

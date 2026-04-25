@@ -35,6 +35,7 @@ export function parseSource(uri: string, source: string): ParsedDocument {
 
   return {
     uri,
+    source,
     tree,
     symbols,
     scopedSymbols,
