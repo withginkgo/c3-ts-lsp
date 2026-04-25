@@ -1,0 +1,31 @@
+{
+  "name": "untitled",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "bin": {
+    "c3-ts-lsp": "./dist/server.js"
+  },
+  "scripts": {
+    "dev": "tsx src/server.ts --stdio",
+    "debug:tree": "tsx src/debug-tree.ts",
+    "debug:symbols": "tsx src/debug-symbols.ts",
+    "build": "tsc",
+    "start": "node dist/server.js --stdio"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "prettier": "^3.3.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "tree-sitter": "^0.25.0",
+    "tree-sitter-c3": "github:c3lang/tree-sitter-c3",
+    "vscode-languageserver": "^9.0.1",
+    "vscode-languageserver-textdocument": "^1.0.12"
+  },
+  "volta": {
+    "node": "22.22.2"
+  }
+}
