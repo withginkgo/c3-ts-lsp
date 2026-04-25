@@ -1,15 +1,15 @@
 {
   "name": "untitled",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
   "bin": {
     "c3-ts-lsp": "./dist/server.js"
   },
   "scripts": {
-    "dev": "tsx src/server.ts --stdio",
-    "debug:tree": "tsx src/debug-tree.ts",
-    "debug:symbols": "tsx src/debug-symbols.ts",
+    "dev": "node --import tsx src/server.ts --stdio",
+    "debug:tree": "node --import tsx src/debug-tree.ts",
+    "debug:symbols": "node --import tsx src/debug-symbols.ts",
     "build": "tsc",
     "start": "node dist/server.js --stdio"
   },

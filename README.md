@@ -4,6 +4,25 @@ This project is a Node-based language server prototype for C3. It uses
 `tree-sitter-c3` to parse C3 source files and `vscode-languageserver` to expose
 document symbols, hover, definition, and completion support over LSP.
 
+## Features
+
+- Workspace-wide C3 indexing for `.c3`, `.c3i`, and `.c3t` files.
+- Document symbols for top-level C3 declarations.
+- Hover and definition lookup across files in the same project.
+- Module-aware completions for direct, imported, and relative module paths.
+
+## Project Structure
+
+```text
+src/server.ts         LSP entrypoint and request wiring
+src/c3-parser.ts      Tree-sitter parsing and symbol extraction
+src/project-index.ts  Module index and symbol resolution
+src/completions.ts    Completion item generation
+src/document-refs.ts  Identifier/reference extraction from documents
+src/workspace.ts      Workspace file discovery and indexing
+src/types.ts          Shared server data types
+```
+
 ## Scripts
 
 ```bash
@@ -17,6 +36,22 @@ npm run debug:symbols
 `npm start` runs the compiled server with `--stdio`. Directly running
 `node dist/server.js` is also supported and defaults to stdio when no transport
 argument is supplied.
+
+## Versioning and Releases
+
+The package version is tracked in `package.json` and `package-lock.json`.
+Release notes are tracked in `CHANGELOG.md`.
+
+Current release: `0.1.0`.
+
+Release checklist:
+
+```bash
+npm version <version> --no-git-tag-version
+npm run build
+```
+
+Then add the matching entry to `CHANGELOG.md` before committing or tagging.
 
 ## Notes
 

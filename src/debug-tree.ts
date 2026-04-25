@@ -1,20 +1,20 @@
-import fs from "node:fs";
-import Parser from "tree-sitter";
-import C3 from "tree-sitter-c3/bindings/node/index.js";
+import fs from 'node:fs';
+import { pathToFileURL } from 'node:url';
 
-const parser = new Parser();
-parser.setLanguage(C3 as Parser.Language);
+import { parseSource } from './c3-parser.js';
 
-const source = fs.readFileSync("testdata/simple/main.c3", "utf8");
-const tree = parser.parse(source);
+const file = process.argv[2] ?? 'testdata/simple/main.c3';
+const source = fs.readFileSync(file, 'utf8');
+const parsed = parseSource(pathToFileURL(file).toString(), source);
+const root = parsed.tree.rootNode;
 
-console.log(tree.rootNode.toString());
+console.log(root.toString());
 
-console.log("\n=== top level nodes ===");
+console.log('\n=== top level nodes ===');
 
-for (let i = 0; i < tree.rootNode.namedChildCount; i++) {
-    const node = tree.rootNode.namedChild(i);
-    if (!node) continue;
+for (let i = 0; i < root.namedChildCount; i++) {
+  const node = root.namedChild(i);
+  if (!node) continue;
 
-    console.log(`${i}: ${node.type} => ${node.text.split("\n")[0]}`);
+  console.log(`${i}: ${node.type} => ${node.text.split('\n')[0]}`);
 }
