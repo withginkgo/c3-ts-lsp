@@ -10,6 +10,9 @@
     "dev": "node --import tsx src/server.ts --stdio",
     "debug:tree": "node --import tsx src/tools/debug-tree.ts",
     "debug:symbols": "node --import tsx src/tools/debug-symbols.ts",
+    "test": "npm run test:typecheck && node --import tsx --test \"tests/**/*.test.ts\"",
+    "test:typecheck": "tsc --noEmit --project tsconfig.test.json",
+    "check": "npm test && npm run build",
     "build": "tsc",
     "start": "node dist/server.js --stdio"
   },

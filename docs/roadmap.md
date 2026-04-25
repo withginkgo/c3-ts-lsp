@@ -14,6 +14,8 @@ The server currently provides a working prototype:
   fault definitions, constants, globals, and macros.
 - Basic hover, definition, document symbols, and completions.
 - Small debug scripts for parser tree and symbol inspection.
+- A Node test runner setup covering parser extraction, project indexing, and
+  completion behavior.
 
 The implementation is intentionally shallow. It indexes top-level declarations
 and resolves symbols mostly by name. It does not yet model lexical scopes,
@@ -49,8 +51,8 @@ tests/                     Unit and integration test harness
 
 Goal: make the repository easy to modify safely.
 
-- Add a test runner and fixture-based tests for parser extraction and module
-  resolution.
+- Keep fixture-based tests for parser extraction, module resolution, and
+  completion behavior current as features expand.
 - Add lint/format scripts and keep build output out of source control.
 - Keep debug tools, README, and troubleshooting docs aligned with the source
   layout.
@@ -58,7 +60,7 @@ Goal: make the repository easy to modify safely.
 Exit criteria:
 
 - `npm run build` passes.
-- Parser and project-index behavior is covered by repeatable tests.
+- Parser, project-index, and completion behavior is covered by repeatable tests.
 - A new contributor can find the entrypoint, parser, index, and LSP handlers
   without reading every file.
 
@@ -168,26 +170,25 @@ Exit criteria:
 
 ## Module Backlog
 
-| Module | Purpose | Priority |
-| --- | --- | --- |
-| `tests/` | Unit and LSP integration test harness | P0 |
-| `src/analysis/scope.ts` | Lexical scope tree | P1 |
-| `src/analysis/resolver.ts` | Identifier and module resolution | P1 |
-| `src/analysis/types.ts` | Lightweight type model | P2 |
-| `src/analysis/diagnostics.ts` | Syntax and semantic diagnostics | P1 |
-| `src/lsp/references.ts` | Reference provider | P2 |
-| `src/lsp/signature-help.ts` | Signature help provider | P2 |
-| `src/lsp/rename.ts` | Rename provider | P3 |
-| `src/lsp/semantic-tokens.ts` | Semantic token provider | P3 |
-| `src/lsp/code-actions.ts` | Quick fixes and import actions | P3 |
-| `src/workspace/watch.ts` | File watching and incremental index updates | P1 |
-| `src/toolchain/c3c.ts` | Optional compiler diagnostic integration | P2 |
+| Module                        | Purpose                                     | Priority |
+| ----------------------------- | ------------------------------------------- | -------- |
+| `tests/`                      | Unit and LSP integration test harness       | P0       |
+| `src/analysis/scope.ts`       | Lexical scope tree                          | P1       |
+| `src/analysis/resolver.ts`    | Identifier and module resolution            | P1       |
+| `src/analysis/types.ts`       | Lightweight type model                      | P2       |
+| `src/analysis/diagnostics.ts` | Syntax and semantic diagnostics             | P1       |
+| `src/lsp/references.ts`       | Reference provider                          | P2       |
+| `src/lsp/signature-help.ts`   | Signature help provider                     | P2       |
+| `src/lsp/rename.ts`           | Rename provider                             | P3       |
+| `src/lsp/semantic-tokens.ts`  | Semantic token provider                     | P3       |
+| `src/lsp/code-actions.ts`     | Quick fixes and import actions              | P3       |
+| `src/workspace/watch.ts`      | File watching and incremental index updates | P1       |
+| `src/toolchain/c3c.ts`        | Optional compiler diagnostic integration    | P2       |
 
 ## Recommended Next Steps
 
-1. Add tests around `parseSource`, `ProjectIndex.findSymbol`, and completion.
-2. Add syntax diagnostics from tree-sitter error nodes.
-3. Replace global fallback resolution with a resolver that understands scopes
+1. Add syntax diagnostics from tree-sitter error nodes.
+2. Replace global fallback resolution with a resolver that understands scopes
    and imports.
-4. Expand parser extraction to members, parameters, enum values, and docs.
-5. Add references and signature help after the resolver is stable.
+3. Expand parser extraction to members, parameters, enum values, and docs.
+4. Add references and signature help after the resolver is stable.

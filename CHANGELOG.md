@@ -2,6 +2,20 @@
 
 All notable project changes are recorded here.
 
+## [Unreleased]
+
+### Added
+
+- Added a Node test runner setup with TypeScript type-checking for tests.
+- Added parser, project-index, and completion tests for the current LSP
+  prototype behavior.
+- Added versioning workflow documentation for changelog, SemVer bumps, checks,
+  commits, and tags.
+
+### Changed
+
+- Documented `npm test` and the current test coverage in project docs.
+
 ## [0.1.0] - 2026-04-25
 
 ### Added

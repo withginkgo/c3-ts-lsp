@@ -22,18 +22,28 @@ src/project/project-index.ts  Module index and symbol resolution
 src/workspace/scan.ts         Workspace file discovery and indexing
 src/shared/types.ts           Shared server data types
 src/tools/                    Local debug scripts
+tests/                        Node test runner coverage for parser/index/LSP helpers
 docs/roadmap.md               Implementation plan toward a usable C3 LSP
+docs/versioning.md            Versioning and release workflow
 ```
 
 ## Scripts
 
 ```bash
+npm test
+npm run check
 npm run build
 npm start
 npm run dev
 npm run debug:tree
 npm run debug:symbols
 ```
+
+`npm test` type-checks the test suite and then runs the TypeScript tests through
+Node's built-in test runner and `tsx`.
+
+`npm run check` runs the full local verification gate: tests plus TypeScript
+build.
 
 `npm start` runs the compiled server with `--stdio`. Directly running
 `node dist/server.js` is also supported and defaults to stdio when no transport
