@@ -4,17 +4,31 @@ All notable project changes are recorded here.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-04-25
+
 ### Added
 
 - Added a Node test runner setup with TypeScript type-checking for tests.
 - Added parser, project-index, and completion tests for the current LSP
   prototype behavior.
+- Added parser coverage for bitstruct, alias, typedef, attrdef, union-style
+  struct declarations, multiple fault constants, global variables, and external
+  function declarations.
+- Added nested symbols for struct members, bitstruct members, enum values,
+  constdef values, interface methods, function parameters, macro parameters, and
+  attribute parameters.
+- Added documentation, attribute, return type, parameter, and declaration body
+  metadata to extracted symbols.
+- Added syntax diagnostics for tree-sitter parse errors.
+- Added recursive document symbols for nested C3 declarations.
 - Added versioning workflow documentation for changelog, SemVer bumps, checks,
   commits, and tags.
 
 ### Changed
 
 - Documented `npm test` and the current test coverage in project docs.
+- Resolved hover and definition lookups against nested symbols in the module
+  index.
 
 ## [0.1.0] - 2026-04-25
 

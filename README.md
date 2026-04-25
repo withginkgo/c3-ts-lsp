@@ -8,14 +8,17 @@ document symbols, hover, definition, and completion support over LSP.
 
 - Workspace-wide C3 indexing for `.c3`, `.c3i`, and `.c3t` files.
 - Document symbols for top-level C3 declarations.
+- Nested document symbols for declaration members, enum values, and parameters.
 - Hover and definition lookup across files in the same project.
 - Module-aware completions for direct, imported, and relative module paths.
+- Syntax diagnostics from tree-sitter parse errors.
 
 ## Project Structure
 
 ```text
 src/server.ts                 LSP entrypoint and request wiring
 src/lsp/completions.ts        Completion item generation
+src/lsp/document-symbols.ts   DocumentSymbol conversion
 src/lsp/document-refs.ts      Identifier/reference extraction from documents
 src/parser/c3-parser.ts       Tree-sitter parsing and symbol extraction
 src/project/project-index.ts  Module index and symbol resolution
@@ -54,7 +57,7 @@ argument is supplied.
 The package version is tracked in `package.json` and `package-lock.json`.
 Release notes are tracked in `CHANGELOG.md`.
 
-Current release: `0.1.0`.
+Current release: `0.2.0`.
 
 Release checklist:
 

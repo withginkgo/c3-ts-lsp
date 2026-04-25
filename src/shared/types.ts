@@ -1,5 +1,9 @@
 import type { Tree } from 'tree-sitter';
-import type { Range, SymbolKind } from 'vscode-languageserver/node.js';
+import type {
+  Diagnostic,
+  Range,
+  SymbolKind,
+} from 'vscode-languageserver/node.js';
 
 export type C3Symbol = {
   name: string;
@@ -8,13 +12,20 @@ export type C3Symbol = {
   uri: string;
   range: Range;
   selectionRange: Range;
+  bodyRange?: Range;
   signature: string;
+  documentation?: string;
+  attributes: string[];
+  returnType?: string;
+  parameters: string[];
+  children: C3Symbol[];
 };
 
 export type ModuleIndex = {
   name: string;
   files: string[];
   symbols: Map<string, C3Symbol[]>;
+  allSymbols: Map<string, C3Symbol[]>;
   imports: Set<string>;
 };
 
@@ -24,4 +35,5 @@ export type ParsedDocument = {
   symbols: C3Symbol[];
   moduleName: string;
   imports: string[];
+  diagnostics: Diagnostic[];
 };

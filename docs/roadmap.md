@@ -10,9 +10,12 @@ The server currently provides a working prototype:
 - Tree-sitter based parsing for C3 source text.
 - Workspace scanning for `.c3`, `.c3i`, and `.c3t` files.
 - A module index keyed by `module` declarations.
-- Top-level symbol extraction for functions, structs, enums, interfaces,
-  fault definitions, constants, globals, and macros.
+- Top-level symbol extraction for all C3 declaration nodes currently exposed by
+  `tree-sitter-c3`.
+- Nested symbol extraction for struct/bitstruct/interface members, enum values,
+  constdef values, function parameters, and macro parameters.
 - Basic hover, definition, document symbols, and completions.
+- Syntax diagnostics from tree-sitter parse errors.
 - Small debug scripts for parser tree and symbol inspection.
 - A Node test runner setup covering parser extraction, project indexing, and
   completion behavior.
@@ -67,6 +70,8 @@ Exit criteria:
 ### Phase 1: Syntax Coverage
 
 Goal: extract a complete, stable syntax model from tree-sitter.
+
+Status: completed in `0.2.0`.
 
 - Cover all top-level C3 declarations supported by the grammar.
 - Extract struct/union/interface members, enum values, function parameters,
@@ -187,8 +192,7 @@ Exit criteria:
 
 ## Recommended Next Steps
 
-1. Add syntax diagnostics from tree-sitter error nodes.
-2. Replace global fallback resolution with a resolver that understands scopes
+1. Replace global fallback resolution with a resolver that understands scopes
    and imports.
-3. Expand parser extraction to members, parameters, enum values, and docs.
-4. Add references and signature help after the resolver is stable.
+2. Add semantic diagnostics for unresolved imports and unresolved symbols.
+3. Add references and signature help after the resolver is stable.

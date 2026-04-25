@@ -42,6 +42,7 @@ export class ProjectIndex {
           name: parsed.moduleName,
           files: [],
           symbols: new Map(),
+          allSymbols: new Map(),
           imports: new Set(),
         };
 
@@ -58,6 +59,8 @@ export class ProjectIndex {
         const list = mod.symbols.get(sym.name) ?? [];
         list.push(sym);
         mod.symbols.set(sym.name, list);
+
+        addSymbolRecursive(mod.allSymbols, sym);
       }
     }
   }
@@ -71,21 +74,21 @@ export class ProjectIndex {
     }
 
     const currentModule = this.modulesByName.get(current.moduleName);
-    const local = currentModule?.symbols.get(ref)?.[0];
+    const local = currentModule?.allSymbols.get(ref)?.[0];
 
     if (local) return local;
 
     if (currentModule) {
       for (const imp of currentModule.imports) {
         const importedModule = this.modulesByName.get(imp);
-        const imported = importedModule?.symbols.get(ref)?.[0];
+        const imported = importedModule?.allSymbols.get(ref)?.[0];
 
         if (imported) return imported;
       }
     }
 
     for (const mod of this.modulesByName.values()) {
-      const found = mod.symbols.get(ref)?.[0];
+      const found = mod.allSymbols.get(ref)?.[0];
       if (found) return found;
     }
 
@@ -129,7 +132,7 @@ export class ProjectIndex {
     const modulePrefix = parts.slice(0, -1).join('::');
 
     const directModule = this.modulesByName.get(modulePrefix);
-    const direct = directModule?.symbols.get(symbolName)?.[0];
+    const direct = directModule?.allSymbols.get(symbolName)?.[0];
 
     if (direct) return direct;
 
@@ -141,7 +144,7 @@ export class ProjectIndex {
 
         if (lastSegment === modulePrefix) {
           const importedModule = this.modulesByName.get(imp);
-          const found = importedModule?.symbols.get(symbolName)?.[0];
+          const found = importedModule?.allSymbols.get(symbolName)?.[0];
 
           if (found) return found;
         }
@@ -150,10 +153,23 @@ export class ProjectIndex {
 
     const relativeModuleName = `${current.moduleName}::${modulePrefix}`;
     const relativeModule = this.modulesByName.get(relativeModuleName);
-    const relative = relativeModule?.symbols.get(symbolName)?.[0];
+    const relative = relativeModule?.allSymbols.get(symbolName)?.[0];
 
     if (relative) return relative;
 
     return undefined;
+  }
+}
+
+function addSymbolRecursive(
+  symbols: Map<string, C3Symbol[]>,
+  symbol: C3Symbol,
+): void {
+  const list = symbols.get(symbol.name) ?? [];
+  list.push(symbol);
+  symbols.set(symbol.name, list);
+
+  for (const child of symbol.children) {
+    addSymbolRecursive(symbols, child);
   }
 }

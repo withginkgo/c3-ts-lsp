@@ -93,3 +93,20 @@ test('ProjectIndex removes closed or deleted documents from the index', () => {
   assert.equal(index.moduleCount(), 0);
   assert.equal(index.findSymbol(uri, 'gone'), undefined);
 });
+
+test('ProjectIndex resolves nested declaration symbols for hover and definition', () => {
+  const index = new ProjectIndex();
+  const uri = pathToFileURL('testdata/phase1/syntax.c3').toString();
+
+  index.upsert(
+    parseSource(uri, readFileSync('testdata/phase1/syntax.c3', 'utf8')),
+  );
+
+  assert.equal(
+    index.findSymbol(uri, 'name')?.signature,
+    'String name @required;',
+  );
+  assert.equal(index.findSymbol(uri, 'GREEN')?.signature, 'GREEN = 2');
+  assert.equal(index.findSymbol(uri, 'path')?.signature, 'String path');
+  assert.equal(index.findSymbol(uri, 'a')?.signature, 'int a');
+});

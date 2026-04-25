@@ -1,12 +1,20 @@
 import Parser, { SyntaxNode } from 'tree-sitter';
 import C3 from 'tree-sitter-c3/bindings/node/index.js';
-import { Position, Range, SymbolKind } from 'vscode-languageserver/node.js';
+import {
+  DiagnosticSeverity,
+  Position,
+  Range,
+  SymbolKind,
+  type Diagnostic,
+} from 'vscode-languageserver/node.js';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 
 import type { C3Symbol, ParsedDocument } from '../shared/types.js';
 
 const parser = new Parser();
 parser.setLanguage(C3 as Parser.Language);
+
+const commentTypes = new Set(['doc_comment', 'block_comment', 'line_comment']);
 
 export function parseSource(uri: string, source: string): ParsedDocument {
   const doc = TextDocument.create(uri, 'c3', 0, source);
@@ -15,6 +23,7 @@ export function parseSource(uri: string, source: string): ParsedDocument {
   const moduleName = extractModuleName(tree.rootNode);
   const imports = extractImports(tree.rootNode);
   const symbols = extractTopLevelSymbols(doc, tree.rootNode, moduleName);
+  const diagnostics = collectSyntaxDiagnostics(tree.rootNode);
 
   return {
     uri,
@@ -22,6 +31,7 @@ export function parseSource(uri: string, source: string): ParsedDocument {
     symbols,
     moduleName,
     imports,
+    diagnostics,
   };
 }
 
@@ -39,15 +49,10 @@ function extractModuleName(root: SyntaxNode): string {
 function extractImports(root: SyntaxNode): string[] {
   const imports: string[] = [];
 
-  for (let i = 0; i < root.namedChildCount; i++) {
-    const child = root.namedChild(i);
-    if (!child) continue;
-
+  for (const child of root.namedChildren) {
     if (child.type !== 'import_declaration') continue;
 
-    const importPath = findFirstDescendantOfType(child, 'import_path');
-
-    if (importPath) {
+    for (const importPath of descendantsOfType(child, 'import_path')) {
       imports.push(importPath.text);
     }
   }
@@ -62,126 +67,665 @@ function extractTopLevelSymbols(
 ): C3Symbol[] {
   const symbols: C3Symbol[] = [];
 
-  for (let i = 0; i < root.namedChildCount; i++) {
-    const node = root.namedChild(i);
-    if (!node) continue;
-
-    const kind = symbolKindForNode(node);
-    if (!kind) continue;
-
-    const nameNode = extractNameNode(node);
-    if (!nameNode) continue;
-
-    symbols.push({
-      name: nameNode.text,
-      moduleName,
-      kind,
-      uri: doc.uri,
-      range: rangeFromNode(node),
-      selectionRange: rangeFromNode(nameNode),
-      signature: compactSignature(node),
-    });
+  for (const node of root.namedChildren) {
+    symbols.push(...topLevelSymbolsForNode(doc, node, moduleName));
   }
 
   return symbols;
 }
 
-function symbolKindForNode(node: SyntaxNode): SymbolKind | null {
+function topLevelSymbolsForNode(
+  doc: TextDocument,
+  node: SyntaxNode,
+  moduleName: string,
+): C3Symbol[] {
   switch (node.type) {
     case 'func_definition':
-      return SymbolKind.Function;
-
-    case 'struct_declaration':
-      return SymbolKind.Struct;
-
-    case 'enum_declaration':
-      return SymbolKind.Enum;
-
-    case 'interface_declaration':
-      return SymbolKind.Interface;
-
-    case 'faultdef_declaration':
-      return SymbolKind.Constant;
-
-    case 'constdef_declaration':
-      return SymbolKind.Constant;
+      return compact([
+        functionSymbol(doc, node, moduleName, SymbolKind.Function),
+      ]);
 
     case 'global_declaration':
-      return SymbolKind.Variable;
+      return globalSymbols(doc, node, moduleName);
+
+    case 'struct_declaration':
+      return compact([
+        aggregateSymbol(
+          doc,
+          node,
+          moduleName,
+          SymbolKind.Struct,
+          structMemberSymbols(doc, node, moduleName),
+        ),
+      ]);
+
+    case 'bitstruct_declaration':
+      return compact([
+        aggregateSymbol(
+          doc,
+          node,
+          moduleName,
+          SymbolKind.Struct,
+          bitstructMemberSymbols(doc, node, moduleName),
+        ),
+      ]);
+
+    case 'enum_declaration':
+      return compact([
+        aggregateSymbol(
+          doc,
+          node,
+          moduleName,
+          SymbolKind.Enum,
+          enumChildSymbols(doc, node, moduleName),
+        ),
+      ]);
+
+    case 'constdef_declaration':
+      return compact([
+        aggregateSymbol(
+          doc,
+          node,
+          moduleName,
+          SymbolKind.Constant,
+          enumChildSymbols(doc, node, moduleName),
+        ),
+      ]);
+
+    case 'interface_declaration':
+      return compact([
+        aggregateSymbol(
+          doc,
+          node,
+          moduleName,
+          SymbolKind.Interface,
+          interfaceMemberSymbols(doc, node, moduleName),
+        ),
+      ]);
 
     case 'macro_declaration':
-      return SymbolKind.Function;
+      return compact([macroSymbol(doc, node, moduleName)]);
+
+    case 'alias_declaration':
+      return compact([
+        simpleDeclarationSymbol(
+          doc,
+          node,
+          moduleName,
+          SymbolKind.TypeParameter,
+        ),
+      ]);
+
+    case 'typedef_declaration':
+      return compact([
+        simpleDeclarationSymbol(
+          doc,
+          node,
+          moduleName,
+          SymbolKind.TypeParameter,
+        ),
+      ]);
+
+    case 'attrdef_declaration':
+      return compact([
+        simpleDeclarationSymbol(
+          doc,
+          node,
+          moduleName,
+          SymbolKind.Property,
+          parameterSymbols(doc, node, moduleName),
+        ),
+      ]);
+
+    case 'faultdef_declaration':
+      return faultSymbols(doc, node, moduleName);
 
     default:
-      return null;
+      return [];
   }
 }
 
+function globalSymbols(
+  doc: TextDocument,
+  node: SyntaxNode,
+  moduleName: string,
+): C3Symbol[] {
+  const funcDecl = directChildOfType(node, 'func_declaration');
+
+  if (funcDecl) {
+    return compact([
+      functionSymbol(doc, funcDecl, moduleName, SymbolKind.Function, node),
+    ]);
+  }
+
+  const constDecl = directChildOfType(node, 'const_declaration');
+
+  if (constDecl) {
+    const nameNode = constDecl.childForFieldName('name');
+    return compact([
+      nameNode
+        ? createSymbol(doc, node, nameNode, moduleName, SymbolKind.Constant, {
+            signature: declarationSignature(node),
+            returnType: constDecl.childForFieldName('type')?.text,
+          })
+        : null,
+    ]);
+  }
+
+  const declaration = directChildOfType(node, 'declaration');
+  if (!declaration) return [];
+
+  const names = declarationNameNodes(declaration);
+
+  return names.map((nameNode) =>
+    createSymbol(doc, node, nameNode, moduleName, SymbolKind.Variable, {
+      signature: declarationSignature(node),
+      returnType: declaration.childForFieldName('type')?.text,
+    }),
+  );
+}
+
+function aggregateSymbol(
+  doc: TextDocument,
+  node: SyntaxNode,
+  moduleName: string,
+  kind: SymbolKind,
+  children: C3Symbol[] = [],
+): C3Symbol | null {
+  const nameNode = extractNameNode(node);
+  if (!nameNode) return null;
+
+  return createSymbol(doc, node, nameNode, moduleName, kind, {
+    bodyNode: node.childForFieldName('body') ?? undefined,
+    children,
+    signature: declarationSignature(node),
+  });
+}
+
+function simpleDeclarationSymbol(
+  doc: TextDocument,
+  node: SyntaxNode,
+  moduleName: string,
+  kind: SymbolKind,
+  children: C3Symbol[] = [],
+): C3Symbol | null {
+  const nameNode = extractNameNode(node);
+  if (!nameNode) return null;
+
+  return createSymbol(doc, node, nameNode, moduleName, kind, {
+    children,
+    signature: declarationSignature(node),
+  });
+}
+
+function functionSymbol(
+  doc: TextDocument,
+  node: SyntaxNode,
+  moduleName: string,
+  kind: SymbolKind,
+  rangeNode = node,
+): C3Symbol | null {
+  const header = directChildOfType(node, 'func_header');
+  const nameNode = header?.childForFieldName('name') ?? extractNameNode(node);
+  if (!nameNode) return null;
+
+  return createSymbol(doc, rangeNode, nameNode, moduleName, kind, {
+    bodyNode: node.childForFieldName('body') ?? undefined,
+    children: parameterSymbols(doc, node, moduleName),
+    parameters: parameterSignatures(node),
+    returnType: header?.childForFieldName('return_type')?.text,
+    signature: callableSignature(node, 'func_header', 'func_param_list'),
+  });
+}
+
+function macroSymbol(
+  doc: TextDocument,
+  node: SyntaxNode,
+  moduleName: string,
+): C3Symbol | null {
+  const header = directChildOfType(node, 'macro_header');
+  const nameNode = header?.childForFieldName('name') ?? extractNameNode(node);
+  if (!nameNode) return null;
+
+  return createSymbol(doc, node, nameNode, moduleName, SymbolKind.Function, {
+    bodyNode: node.childForFieldName('body') ?? undefined,
+    children: parameterSymbols(doc, node, moduleName),
+    parameters: parameterSignatures(node),
+    returnType: header?.childForFieldName('return_type')?.text,
+    signature: `macro ${callableSignature(
+      node,
+      'macro_header',
+      'macro_param_list',
+    )}`,
+  });
+}
+
+function faultSymbols(
+  doc: TextDocument,
+  node: SyntaxNode,
+  moduleName: string,
+): C3Symbol[] {
+  return directChildrenOfType(node, 'const_ident').map((nameNode) =>
+    createSymbol(doc, node, nameNode, moduleName, SymbolKind.Constant, {
+      signature: declarationSignature(node),
+    }),
+  );
+}
+
+function structMemberSymbols(
+  doc: TextDocument,
+  node: SyntaxNode,
+  moduleName: string,
+): C3Symbol[] {
+  const body = node.childForFieldName('body');
+  if (!body) return [];
+
+  const symbols: C3Symbol[] = [];
+
+  for (const member of directChildrenOfType(
+    body,
+    'struct_member_declaration',
+  )) {
+    const fieldNames = identifierListNames(member);
+
+    for (const nameNode of fieldNames) {
+      symbols.push(
+        createSymbol(doc, member, nameNode, moduleName, SymbolKind.Field, {
+          signature: declarationSignature(member),
+          returnType: member.childForFieldName('type')?.text,
+        }),
+      );
+    }
+
+    if (fieldNames.length > 0) continue;
+
+    const nestedName = directChildOfType(member, 'ident');
+    const nestedBody = member.childForFieldName('body');
+
+    if (nestedName && nestedBody) {
+      symbols.push(
+        createSymbol(doc, member, nestedName, moduleName, SymbolKind.Struct, {
+          bodyNode: nestedBody,
+          children: structMemberSymbols(doc, member, moduleName),
+          signature: declarationSignature(member),
+        }),
+      );
+    }
+  }
+
+  return symbols;
+}
+
+function bitstructMemberSymbols(
+  doc: TextDocument,
+  node: SyntaxNode,
+  moduleName: string,
+): C3Symbol[] {
+  const body = node.childForFieldName('body');
+  if (!body) return [];
+
+  return directChildrenOfType(body, 'bitstruct_member_declaration').flatMap(
+    (member) => {
+      const nameNode = directChildOfType(member, 'ident');
+
+      return nameNode
+        ? [
+            createSymbol(doc, member, nameNode, moduleName, SymbolKind.Field, {
+              signature: declarationSignature(member),
+              returnType: member.childForFieldName('type')?.text,
+            }),
+          ]
+        : [];
+    },
+  );
+}
+
+function enumChildSymbols(
+  doc: TextDocument,
+  node: SyntaxNode,
+  moduleName: string,
+): C3Symbol[] {
+  const symbols: C3Symbol[] = [];
+
+  for (const param of descendantsOfType(node, 'enum_param')) {
+    const nameNode = param.childForFieldName('name');
+    if (!nameNode) continue;
+
+    symbols.push(
+      createSymbol(doc, param, nameNode, moduleName, SymbolKind.Variable, {
+        signature: declarationSignature(param),
+        returnType: param.childForFieldName('type')?.text,
+      }),
+    );
+  }
+
+  const body = node.childForFieldName('body');
+  if (!body) return symbols;
+
+  for (const constant of directChildrenOfType(body, 'enum_constant')) {
+    const nameNode = constant.childForFieldName('name');
+    if (!nameNode) continue;
+
+    symbols.push(
+      createSymbol(doc, constant, nameNode, moduleName, SymbolKind.Constant, {
+        signature: declarationSignature(constant),
+      }),
+    );
+  }
+
+  return symbols;
+}
+
+function interfaceMemberSymbols(
+  doc: TextDocument,
+  node: SyntaxNode,
+  moduleName: string,
+): C3Symbol[] {
+  const body = node.childForFieldName('body');
+  if (!body) return [];
+
+  return directChildrenOfType(body, 'interface_func_declaration').flatMap(
+    (member) => {
+      const funcDecl = directChildOfType(member, 'func_declaration');
+      if (!funcDecl) return [];
+
+      const symbol = functionSymbol(
+        doc,
+        funcDecl,
+        moduleName,
+        SymbolKind.Method,
+        member,
+      );
+
+      return symbol ? [symbol] : [];
+    },
+  );
+}
+
+function parameterSymbols(
+  doc: TextDocument,
+  node: SyntaxNode,
+  moduleName: string,
+): C3Symbol[] {
+  const symbols: C3Symbol[] = [];
+
+  for (const param of descendantsOfType(node, 'param')) {
+    const nameNode = param.childForFieldName('name');
+    if (!nameNode) continue;
+
+    symbols.push(
+      createSymbol(doc, param, nameNode, moduleName, SymbolKind.Variable, {
+        signature: declarationSignature(param),
+        returnType: param.childForFieldName('type')?.text,
+      }),
+    );
+  }
+
+  for (const trailingBlockParam of descendantsOfType(
+    node,
+    'trailing_block_param',
+  )) {
+    const nameNode = directChildOfType(trailingBlockParam, 'at_ident');
+    if (!nameNode) continue;
+
+    symbols.push(
+      createSymbol(
+        doc,
+        trailingBlockParam,
+        nameNode,
+        moduleName,
+        SymbolKind.Variable,
+        {
+          signature: compactText(trailingBlockParam.text),
+        },
+      ),
+    );
+  }
+
+  return symbols;
+}
+
+function createSymbol(
+  doc: TextDocument,
+  node: SyntaxNode,
+  nameNode: SyntaxNode,
+  moduleName: string,
+  kind: SymbolKind,
+  options: {
+    signature: string;
+    bodyNode?: SyntaxNode;
+    children?: C3Symbol[];
+    documentation?: string;
+    attributes?: string[];
+    returnType?: string;
+    parameters?: string[];
+  },
+): C3Symbol {
+  return {
+    name: nameNode.text,
+    moduleName,
+    kind,
+    uri: doc.uri,
+    range: rangeFromNode(node),
+    selectionRange: rangeFromNode(nameNode),
+    bodyRange: options.bodyNode ? rangeFromNode(options.bodyNode) : undefined,
+    signature: options.signature,
+    documentation: options.documentation ?? documentationFor(node),
+    attributes: options.attributes ?? attributesFor(node),
+    returnType: options.returnType,
+    parameters: options.parameters ?? [],
+    children: options.children ?? [],
+  };
+}
+
 function extractNameNode(node: SyntaxNode): SyntaxNode | null {
-  if (node.type === 'func_definition') {
-    const header = findFirstDescendantOfType(node, 'func_header');
-    if (!header) return null;
-
-    const name = header.childForFieldName('name');
-    if (name) return name;
-
-    return findFirstDescendantOfTypes(header, ['ident']);
-  }
-
-  if (node.type === 'struct_declaration') {
-    const name = node.childForFieldName('name');
-    if (name) return name;
-
-    return findFirstDescendantOfTypes(node, ['type_ident']);
-  }
-
-  if (node.type === 'enum_declaration') {
-    const name = node.childForFieldName('name');
-    if (name) return name;
-
-    return findFirstDescendantOfTypes(node, ['type_ident']);
-  }
-
-  if (node.type === 'interface_declaration') {
-    const name = node.childForFieldName('name');
-    if (name) return name;
-
-    return findFirstDescendantOfTypes(node, ['type_ident']);
-  }
-
-  if (node.type === 'faultdef_declaration') {
-    return findFirstDescendantOfTypes(node, ['const_ident', 'ident']);
-  }
-
   const byField = node.childForFieldName('name');
   if (byField) return byField;
+
+  if (node.type === 'func_definition' || node.type === 'func_declaration') {
+    const header = directChildOfType(node, 'func_header');
+    return header?.childForFieldName('name') ?? null;
+  }
+
+  if (node.type === 'macro_declaration') {
+    const header = directChildOfType(node, 'macro_header');
+    return header?.childForFieldName('name') ?? null;
+  }
 
   return findFirstDescendantOfTypes(node, [
     'ident',
     'type_ident',
     'const_ident',
     'at_ident',
+    'at_type_ident',
     'ct_ident',
     'ct_type_ident',
     'ct_const_ident',
   ]);
 }
 
-function findFirstDescendantOfType(
+function declarationNameNodes(node: SyntaxNode): SyntaxNode[] {
+  const byField = node.childForFieldName('name');
+  if (byField) return [byField];
+
+  const identifierList = directChildOfType(node, 'identifier_list');
+  if (identifierList) return directChildrenOfType(identifierList, 'ident');
+
+  return [];
+}
+
+function identifierListNames(node: SyntaxNode): SyntaxNode[] {
+  const identifierList = directChildOfType(node, 'identifier_list');
+  if (!identifierList) return [];
+
+  return directChildrenOfType(identifierList, 'ident');
+}
+
+function parameterSignatures(node: SyntaxNode): string[] {
+  return descendantsOfType(node, 'param').map((param) =>
+    compactText(param.text),
+  );
+}
+
+function declarationSignature(node: SyntaxNode): string {
+  const body = node.childForFieldName('body');
+  const startIndex = signatureStartIndex(node);
+  const endIndex = body?.startIndex ?? node.endIndex;
+
+  return compactText(
+    node.text.slice(startIndex - node.startIndex, endIndex - node.startIndex),
+  );
+}
+
+function callableSignature(
   node: SyntaxNode,
-  type: string,
-): SyntaxNode | null {
-  if (node.type === type) return node;
+  headerType: string,
+  paramListType: string,
+): string {
+  const header = directChildOfType(node, headerType);
+  const params = directChildOfType(node, paramListType);
 
-  for (let i = 0; i < node.namedChildCount; i++) {
-    const child = node.namedChild(i);
-    if (!child) continue;
-
-    const found = findFirstDescendantOfType(child, type);
-    if (found) return found;
+  if (!header || !params) {
+    return declarationSignature(node);
   }
 
-  return null;
+  const endParts = directChildrenOfTypes(node, [
+    'generic_param_list',
+    'attributes',
+  ])
+    .filter((part) => part.startIndex > params.endIndex)
+    .map((part) => part.text);
+
+  const suffix = endParts.length > 0 ? ` ${endParts.join(' ')}` : '';
+  return compactText(`${header.text}${params.text}${suffix}`);
+}
+
+function signatureStartIndex(node: SyntaxNode): number {
+  const docComment = directChildOfType(node, 'doc_comment');
+  return docComment ? docComment.endIndex : node.startIndex;
+}
+
+function documentationFor(node: SyntaxNode): string | undefined {
+  const docComment = directChildOfType(node, 'doc_comment');
+
+  if (docComment) {
+    return cleanCommentText(docComment.text);
+  }
+
+  const previous = node.previousNamedSibling;
+
+  if (
+    previous &&
+    commentTypes.has(previous.type) &&
+    previous.endPosition.row + 1 >= node.startPosition.row
+  ) {
+    return cleanCommentText(previous.text);
+  }
+
+  return undefined;
+}
+
+function cleanCommentText(text: string): string {
+  const cleaned = text
+    .replace(/^<\*/, '')
+    .replace(/\*>$/, '')
+    .replace(/^\/\*/, '')
+    .replace(/\*\/$/, '')
+    .split('\n')
+    .map((line) =>
+      line
+        .trim()
+        .replace(/^\* ?/, '')
+        .replace(/^\/\/ ?/, ''),
+    )
+    .join('\n')
+    .trim();
+
+  return cleaned;
+}
+
+function attributesFor(node: SyntaxNode): string[] {
+  const attributes: string[] = [];
+
+  for (const child of node.namedChildren) {
+    if (child.type === 'attributes') {
+      attributes.push(
+        ...directChildrenOfType(child, 'attribute').map((attr) => attr.text),
+      );
+    }
+
+    if (child.type === 'attribute') {
+      attributes.push(child.text);
+    }
+  }
+
+  return attributes;
+}
+
+function collectSyntaxDiagnostics(root: SyntaxNode): Diagnostic[] {
+  const diagnostics: Diagnostic[] = [];
+
+  function visit(node: SyntaxNode): void {
+    if (!node.hasError && !node.isError && !node.isMissing) return;
+
+    if (node.isError || node.isMissing) {
+      diagnostics.push({
+        severity: DiagnosticSeverity.Error,
+        range: nonEmptyRangeFromNode(node),
+        message: node.isMissing
+          ? `Missing ${node.type}`
+          : 'Syntax error: unable to parse this C3 syntax',
+        source: 'tree-sitter-c3',
+      });
+
+      if (node.isError) return;
+    }
+
+    for (const child of node.children) {
+      visit(child);
+    }
+  }
+
+  visit(root);
+
+  return diagnostics;
+}
+
+function compactText(text: string): string {
+  return text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join(' ');
+}
+
+function directChildOfType(node: SyntaxNode, type: string): SyntaxNode | null {
+  return node.namedChildren.find((child) => child.type === type) ?? null;
+}
+
+function directChildrenOfType(node: SyntaxNode, type: string): SyntaxNode[] {
+  return node.namedChildren.filter((child) => child.type === type);
+}
+
+function directChildrenOfTypes(
+  node: SyntaxNode,
+  types: string[],
+): SyntaxNode[] {
+  return node.namedChildren.filter((child) => types.includes(child.type));
+}
+
+function descendantsOfType(node: SyntaxNode, type: string): SyntaxNode[] {
+  const found: SyntaxNode[] = [];
+
+  for (const child of node.namedChildren) {
+    if (child.type === type) {
+      found.push(child);
+    }
+
+    found.push(...descendantsOfType(child, type));
+  }
+
+  return found;
 }
 
 function findFirstDescendantOfTypes(
@@ -190,10 +734,7 @@ function findFirstDescendantOfTypes(
 ): SyntaxNode | null {
   if (types.includes(node.type)) return node;
 
-  for (let i = 0; i < node.namedChildCount; i++) {
-    const child = node.namedChild(i);
-    if (!child) continue;
-
+  for (const child of node.namedChildren) {
     const found = findFirstDescendantOfTypes(child, types);
     if (found) return found;
   }
@@ -208,38 +749,22 @@ function rangeFromNode(node: SyntaxNode): Range {
   );
 }
 
-function compactSignature(node: SyntaxNode): string {
-  if (node.type === 'func_definition') {
-    const header = findFirstDescendantOfType(node, 'func_header');
-    const params = findFirstDescendantOfType(node, 'func_param_list');
-
-    if (header && params) {
-      return `${header.text}${params.text}`;
-    }
-
-    const braceIndex = node.text.indexOf('{');
-    if (braceIndex >= 0) {
-      return node.text.slice(0, braceIndex).trim();
-    }
-  }
+function nonEmptyRangeFromNode(node: SyntaxNode): Range {
+  const range = rangeFromNode(node);
 
   if (
-    node.type === 'struct_declaration' ||
-    node.type === 'enum_declaration' ||
-    node.type === 'interface_declaration'
+    range.start.line === range.end.line &&
+    range.start.character === range.end.character
   ) {
-    const braceIndex = node.text.indexOf('{');
-    if (braceIndex >= 0) {
-      return node.text.slice(0, braceIndex).trim();
-    }
+    return Range.create(
+      range.start,
+      Position.create(range.end.line, range.end.character + 1),
+    );
   }
 
-  const text = node.text
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .join(' ');
+  return range;
+}
 
-  if (text.length <= 160) return text;
-  return text.slice(0, 157) + '...';
+function compact<T>(items: Array<T | null | undefined>): T[] {
+  return items.filter((item): item is T => item != null);
 }

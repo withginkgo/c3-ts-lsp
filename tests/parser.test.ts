@@ -60,3 +60,98 @@ test('parseSource extracts import paths', () => {
     ['use'],
   );
 });
+
+test('parseSource extracts Phase 1 top-level declaration coverage', () => {
+  const file = 'testdata/phase1/syntax.c3';
+  const parsed = parseSource(
+    pathToFileURL(file).toString(),
+    readFileSync(file, 'utf8'),
+  );
+
+  assert.equal(parsed.moduleName, 'phase1');
+  assert.deepEqual(parsed.diagnostics, []);
+  assert.deepEqual(
+    parsed.symbols.map((symbol) => [
+      symbol.name,
+      symbol.kind,
+      symbol.signature,
+    ]),
+    [
+      ['User', SymbolKind.Struct, 'struct User @packed'],
+      ['Value', SymbolKind.Struct, 'union Value'],
+      ['Flags', SymbolKind.Struct, 'bitstruct Flags : uint'],
+      ['Color', SymbolKind.Enum, 'enum Color : int'],
+      ['ErrorCode', SymbolKind.Constant, 'constdef ErrorCode : int'],
+      ['Reader', SymbolKind.Interface, 'interface Reader'],
+      ['NOT_FOUND', SymbolKind.Constant, 'faultdef NOT_FOUND, DENIED;'],
+      ['DENIED', SymbolKind.Constant, 'faultdef NOT_FOUND, DENIED;'],
+      ['Name', SymbolKind.TypeParameter, 'typedef Name = String;'],
+      ['UserName', SymbolKind.TypeParameter, 'alias UserName = String;'],
+      ['@Route', SymbolKind.Property, 'attrdef @Route(String path);'],
+      ['global_count', SymbolKind.Variable, 'int global_count;'],
+      ['imported', SymbolKind.Function, 'void imported()'],
+      ['trace', SymbolKind.Function, 'macro void trace(String msg)'],
+      ['add', SymbolKind.Function, 'int add(int a, int b)'],
+    ],
+  );
+});
+
+test('parseSource extracts nested members, parameters, docs, attrs, and body ranges', () => {
+  const file = 'testdata/phase1/syntax.c3';
+  const parsed = parseSource(
+    pathToFileURL(file).toString(),
+    readFileSync(file, 'utf8'),
+  );
+  const user = parsed.symbols.find((symbol) => symbol.name === 'User');
+  const name = user?.children.find((symbol) => symbol.name === 'name');
+  const color = parsed.symbols.find((symbol) => symbol.name === 'Color');
+  const reader = parsed.symbols.find((symbol) => symbol.name === 'Reader');
+  const trace = parsed.symbols.find((symbol) => symbol.name === 'trace');
+  const add = parsed.symbols.find((symbol) => symbol.name === 'add');
+
+  assert.equal(user?.documentation, '"User docs"');
+  assert.deepEqual(user?.attributes, ['@packed']);
+  assert.equal(user?.bodyRange?.start.line, 4);
+  assert.deepEqual(
+    user?.children.map((symbol) => [
+      symbol.name,
+      symbol.kind,
+      symbol.returnType,
+    ]),
+    [
+      ['name', SymbolKind.Field, 'String'],
+      ['age', SymbolKind.Field, 'int'],
+    ],
+  );
+  assert.equal(name?.documentation, '"Field docs"');
+  assert.deepEqual(name?.attributes, ['@required']);
+  assert.deepEqual(
+    color?.children.map((symbol) => symbol.name),
+    ['RED', 'GREEN', 'BLUE'],
+  );
+  assert.deepEqual(
+    reader?.children.map((symbol) => [
+      symbol.name,
+      symbol.kind,
+      symbol.children.map((child) => child.name),
+    ]),
+    [['read', SymbolKind.Method, ['path']]],
+  );
+  assert.deepEqual(trace?.parameters, ['String msg']);
+  assert.deepEqual(add?.parameters, ['int a', 'int b']);
+});
+
+test('parseSource reports tree-sitter syntax diagnostics', () => {
+  const parsed = parseSource(
+    'file:///workspace/broken.c3',
+    ['module broken;', 'fn void nope( {', ''].join('\n'),
+  );
+
+  assert.equal(parsed.diagnostics.length, 1);
+  assert.equal(parsed.diagnostics[0]?.severity, 1);
+  assert.equal(
+    parsed.diagnostics[0]?.message,
+    'Syntax error: unable to parse this C3 syntax',
+  );
+  assert.equal(parsed.diagnostics[0]?.source, 'tree-sitter-c3');
+});

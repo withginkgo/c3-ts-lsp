@@ -11,7 +11,6 @@ import {
   TextDocumentSyncKind,
   MarkupKind,
   Location,
-  type DocumentSymbol,
   type Hover,
   type InitializeParams,
   type InitializeResult,
@@ -20,6 +19,7 @@ import { TextDocument } from 'vscode-languageserver-textdocument';
 
 import { completionItems } from './lsp/completions.js';
 import { wordAtPosition } from './lsp/document-refs.js';
+import { documentSymbols } from './lsp/document-symbols.js';
 import { parseSource } from './parser/c3-parser.js';
 import { ProjectIndex } from './project/project-index.js';
 import { scanWorkspace } from './workspace/scan.js';
@@ -84,17 +84,11 @@ documents.onDidClose((event) => {
   restoreClosedDocumentFromDisk(event.document.uri);
 });
 
-connection.onDocumentSymbol((params): DocumentSymbol[] => {
+connection.onDocumentSymbol((params) => {
   const parsed = projectIndex.getParsed(params.textDocument.uri);
   if (!parsed) return [];
 
-  return parsed.symbols.map((symbol) => ({
-    name: symbol.name,
-    detail: symbol.signature,
-    kind: symbol.kind,
-    range: symbol.range,
-    selectionRange: symbol.selectionRange,
-  }));
+  return documentSymbols(parsed);
 });
 
 connection.onHover((params): Hover | null => {
@@ -144,6 +138,7 @@ connection.onCompletion((params) => {
 function parseAndIndexDocument(doc: TextDocument): void {
   const parsed = parseSource(doc.uri, doc.getText());
   projectIndex.upsert(parsed);
+  publishDiagnostics(parsed);
 
   connection.console.log(
     `indexed ${doc.uri}: module=${parsed.moduleName}, symbols=${parsed.symbols.length}`,
@@ -157,7 +152,9 @@ function restoreClosedDocumentFromDisk(uri: string): void {
     try {
       if (fs.existsSync(filePath)) {
         const source = fs.readFileSync(filePath, 'utf8');
-        projectIndex.upsert(parseSource(uri, source));
+        const parsed = parseSource(uri, source);
+        projectIndex.upsert(parsed);
+        publishDiagnostics(parsed);
         return;
       }
     } catch (err) {
@@ -168,6 +165,14 @@ function restoreClosedDocumentFromDisk(uri: string): void {
   }
 
   projectIndex.remove(uri);
+  connection.sendDiagnostics({ uri, diagnostics: [] });
+}
+
+function publishDiagnostics(parsed: ReturnType<typeof parseSource>): void {
+  connection.sendDiagnostics({
+    uri: parsed.uri,
+    diagnostics: parsed.diagnostics,
+  });
 }
 
 function resolveWorkspaceRoot(params: InitializeParams): string | null {
