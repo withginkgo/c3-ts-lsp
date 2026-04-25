@@ -8,7 +8,11 @@ All notable project changes are recorded here.
 
 - Added a structured resolver result with selected symbol, candidates, and
   resolution status for position-aware symbol lookup.
+- Added configurable standard library indexing through LSP initialization
+  options and C3 standard-library environment variables.
 - Added hover and definition handling for ambiguous symbol candidates.
+- Added richer hover output with full aggregate details, owning aggregate
+  context for members, and resolved type context for variables.
 - Added workspace file watching so changed, created, and deleted C3 source
   files update the project index without restarting the server.
 - Added module alias and relative import resolution for hover, definition, and
@@ -36,6 +40,8 @@ All notable project changes are recorded here.
   unrelated modules and private imported declarations.
 - Made project index updates rebuild only affected modules during single-file
   changes.
+- Made standard library files participate in resolution without publishing
+  diagnostics for those read-only files.
 - Made hover, definition, diagnostics, and references distinguish struct
   members from unrelated top-level symbols.
 - Made member completions use the receiver expression before the cursor, so

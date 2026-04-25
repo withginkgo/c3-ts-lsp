@@ -4,10 +4,16 @@ import { pathToFileURL } from 'node:url';
 
 import { parseSource } from '../parser/c3-parser.js';
 import type { ProjectIndex } from '../project/project-index.js';
+import type { SourceKind } from '../shared/types.js';
 
 type WorkspaceScanReporter = {
   log?: (message: string) => void;
   error?: (message: string) => void;
+};
+
+type WorkspaceScanOptions = {
+  rebuild?: boolean;
+  sourceKind?: SourceKind;
 };
 
 const c3Extensions = new Set(['.c3', '.c3i', '.c3t']);
@@ -23,24 +29,28 @@ export function scanWorkspace(
   root: string,
   index: ProjectIndex,
   reporter: WorkspaceScanReporter = {},
+  options: WorkspaceScanOptions = {},
 ): number {
   const files = collectC3Files(root);
+  const sourceKind = options.sourceKind ?? 'workspace';
 
-  reporter.log?.(`found ${files.length} C3 files`);
+  reporter.log?.(`found ${files.length} ${sourceKind} C3 files`);
 
   for (const file of files) {
     try {
       const source = fs.readFileSync(file, 'utf8');
       const uri = pathToFileURL(file).toString();
 
-      index.upsert(parseSource(uri, source), false);
+      index.upsert(parseSource(uri, source, { sourceKind }), false);
     } catch (err) {
       reporter.error?.(`failed to parse ${file}: ${String(err)}`);
     }
   }
 
-  index.rebuild();
-  reporter.log?.(`indexed ${index.moduleCount()} modules`);
+  if (options.rebuild ?? true) {
+    index.rebuild();
+    reporter.log?.(`indexed ${index.moduleCount()} modules`);
+  }
 
   return files.length;
 }

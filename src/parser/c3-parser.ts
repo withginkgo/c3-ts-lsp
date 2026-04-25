@@ -14,6 +14,7 @@ import type {
   C3ModuleAlias,
   C3Symbol,
   ParsedDocument,
+  SourceKind,
 } from '../shared/types.js';
 
 const parser = new Parser();
@@ -21,7 +22,11 @@ parser.setLanguage(C3 as Parser.Language);
 
 const commentTypes = new Set(['doc_comment', 'block_comment', 'line_comment']);
 
-export function parseSource(uri: string, source: string): ParsedDocument {
+export function parseSource(
+  uri: string,
+  source: string,
+  options: { sourceKind?: SourceKind } = {},
+): ParsedDocument {
   const doc = TextDocument.create(uri, 'c3', 0, source);
   const tree = parser.parse(source);
 
@@ -36,6 +41,7 @@ export function parseSource(uri: string, source: string): ParsedDocument {
   return {
     uri,
     source,
+    sourceKind: options.sourceKind ?? 'workspace',
     tree,
     symbols,
     scopedSymbols,

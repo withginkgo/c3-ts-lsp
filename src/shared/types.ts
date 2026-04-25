@@ -46,9 +46,12 @@ export type ModuleIndex = {
   moduleAliases: Map<string, string>;
 };
 
+export type SourceKind = 'workspace' | 'stdlib';
+
 export type ParsedDocument = {
   uri: string;
   source: string;
+  sourceKind: SourceKind;
   tree: Tree;
   symbols: C3Symbol[];
   scopedSymbols: C3Symbol[];

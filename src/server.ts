@@ -9,7 +9,6 @@ import {
   TextDocuments,
   ProposedFeatures,
   TextDocumentSyncKind,
-  MarkupKind,
   Location,
   type Hover,
   type InitializeParams,
@@ -21,9 +20,10 @@ import { semanticDiagnostics } from './analysis/diagnostics.js';
 import { completionItems } from './lsp/completions.js';
 import { wordAtPosition } from './lsp/document-refs.js';
 import { documentSymbols } from './lsp/document-symbols.js';
+import { hoverFromResolveResult } from './lsp/hover.js';
 import { parseSource } from './parser/c3-parser.js';
 import { ProjectIndex } from './project/project-index.js';
-import type { C3Symbol, ResolveResult } from './shared/types.js';
+import type { C3Symbol, SourceKind } from './shared/types.js';
 import { scanWorkspace } from './workspace/scan.js';
 import { watchWorkspace, type WorkspaceWatcher } from './workspace/watch.js';
 
@@ -46,9 +46,11 @@ const projectIndex = new ProjectIndex();
 
 let workspaceRoot: string | null = null;
 let workspaceWatcher: WorkspaceWatcher | null = null;
+let stdlibRoots: string[] = [];
 
 connection.onInitialize((params: InitializeParams): InitializeResult => {
   workspaceRoot = resolveWorkspaceRoot(params);
+  stdlibRoots = resolveStdlibRoots(params, workspaceRoot);
 
   return {
     capabilities: {
@@ -71,10 +73,45 @@ connection.onInitialized(() => {
   }
 
   connection.console.log(`workspace root: ${workspaceRoot}`);
-  scanWorkspace(workspaceRoot, projectIndex, {
-    log: (message) => connection.console.log(message),
-    error: (message) => connection.console.error(message),
-  });
+  if (stdlibRoots.length > 0) {
+    connection.console.log(`stdlib roots: ${stdlibRoots.join(', ')}`);
+  }
+
+  scanWorkspace(
+    workspaceRoot,
+    projectIndex,
+    {
+      log: (message) => connection.console.log(message),
+      error: (message) => connection.console.error(message),
+    },
+    {
+      rebuild: false,
+    },
+  );
+
+  for (const stdlibRoot of stdlibRoots) {
+    scanWorkspace(
+      stdlibRoot,
+      projectIndex,
+      {
+        log: (message) => connection.console.log(message),
+        error: (message) => connection.console.error(message),
+      },
+      {
+        rebuild: false,
+        sourceKind: 'stdlib',
+      },
+    );
+  }
+
+  projectIndex.rebuild();
+  connection.console.log(`indexed ${projectIndex.moduleCount()} modules`);
+
+  if (stdlibRoots.length === 0) {
+    connection.console.log(
+      'no stdlib root configured; set initializationOptions.stdlibPath or C3_STDLIB_PATH',
+    );
+  }
   publishWorkspaceDiagnostics();
 
   workspaceWatcher = watchWorkspace(
@@ -127,7 +164,7 @@ connection.onHover((params): Hover | null => {
     params.position,
   );
 
-  return hoverFromResolveResult(result);
+  return hoverFromResolveResult(projectIndex, result);
 });
 
 connection.onDefinition((params): Location | Location[] | null => {
@@ -179,7 +216,9 @@ connection.onCompletion((params) => {
 });
 
 function parseAndIndexDocument(doc: TextDocument): void {
-  const parsed = parseSource(doc.uri, doc.getText());
+  const parsed = parseSource(doc.uri, doc.getText(), {
+    sourceKind: sourceKindForUri(doc.uri),
+  });
   projectIndex.upsert(parsed);
   publishWorkspaceDiagnostics();
 
@@ -202,11 +241,13 @@ function indexDocumentFromDisk(uri: string): void {
 
   const filePath = filePathFromUri(uri);
 
-  if (filePath && workspaceRoot && isPathInside(filePath, workspaceRoot)) {
+  if (filePath && isIndexedSourcePath(filePath)) {
     try {
       if (fs.existsSync(filePath)) {
         const source = fs.readFileSync(filePath, 'utf8');
-        const parsed = parseSource(uri, source);
+        const parsed = parseSource(uri, source, {
+          sourceKind: sourceKindForPath(filePath),
+        });
         projectIndex.upsert(parsed);
         publishWorkspaceDiagnostics();
         connection.console.log(
@@ -232,6 +273,8 @@ function removeIndexedDocument(uri: string): void {
 }
 
 function publishDiagnostics(parsed: ReturnType<typeof parseSource>): void {
+  if (parsed.sourceKind === 'stdlib') return;
+
   const diagnostics =
     parsed.diagnostics.length > 0
       ? parsed.diagnostics
@@ -247,49 +290,6 @@ function publishWorkspaceDiagnostics(): void {
   for (const parsed of projectIndex.allParsed()) {
     publishDiagnostics(parsed);
   }
-}
-
-function hoverFromResolveResult(result: ResolveResult): Hover | null {
-  if (result.selected) {
-    return symbolHover(result.selected);
-  }
-
-  if (result.reason === 'ambiguous') {
-    return ambiguousHover(result.candidates);
-  }
-
-  return null;
-}
-
-function symbolHover(symbol: C3Symbol): Hover {
-  return {
-    contents: {
-      kind: MarkupKind.Markdown,
-      value: [
-        '```c3',
-        symbol.signature,
-        '```',
-        '',
-        `module: \`${symbol.moduleName || '<unknown>'}\``,
-      ].join('\n'),
-    },
-  };
-}
-
-function ambiguousHover(candidates: C3Symbol[]): Hover {
-  return {
-    contents: {
-      kind: MarkupKind.Markdown,
-      value: [
-        `Ambiguous symbol: ${candidates.length} candidates`,
-        '',
-        ...candidates.map(
-          (symbol) =>
-            `- \`${symbol.moduleName || '<unknown>'}\`: \`${symbol.signature}\``,
-        ),
-      ].join('\n'),
-    },
-  };
 }
 
 function symbolLocation(symbol: C3Symbol): Location {
@@ -310,12 +310,142 @@ function resolveWorkspaceRoot(params: InitializeParams): string | null {
   }
 }
 
+function resolveStdlibRoots(
+  params: InitializeParams,
+  root: string | null,
+): string[] {
+  const configured = [
+    ...stdlibPathsFromInitializationOptions(params.initializationOptions),
+    ...stdlibPathsFromEnvironment(),
+  ];
+  const roots: string[] = [];
+  const seen = new Set<string>();
+
+  for (const configuredPath of configured) {
+    const resolved = normalizeConfiguredPath(configuredPath, root);
+
+    if (
+      !resolved ||
+      resolved === root ||
+      seen.has(resolved) ||
+      !isDirectory(resolved)
+    ) {
+      continue;
+    }
+
+    seen.add(resolved);
+    roots.push(resolved);
+  }
+
+  return roots;
+}
+
+function stdlibPathsFromInitializationOptions(options: unknown): string[] {
+  if (!options || typeof options !== 'object') return [];
+
+  const record = options as Record<string, unknown>;
+  const values = [
+    record.stdlibPath,
+    record.stdlibPaths,
+    record.standardLibraryPath,
+    record.standardLibraryPaths,
+    record.c3StdlibPath,
+    record.c3StdlibPaths,
+  ];
+
+  return values.flatMap(configuredPathValues);
+}
+
+function stdlibPathsFromEnvironment(): string[] {
+  const direct = [
+    process.env.C3_STDLIB_PATH,
+    process.env.C3_STDLIB_ROOT,
+    process.env.C3_STANDARD_LIBRARY_PATH,
+  ].flatMap(configuredPathValues);
+  const homes = [process.env.C3_HOME, process.env.C3C_HOME]
+    .flatMap(configuredPathValues)
+    .flatMap((home) => [
+      path.join(home, 'lib'),
+      path.join(home, 'lib', 'std'),
+      path.join(home, 'stdlib'),
+    ]);
+
+  return [...direct, ...homes];
+}
+
+function configuredPathValues(value: unknown): string[] {
+  if (typeof value === 'string') {
+    return value
+      .split(path.delimiter)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  if (Array.isArray(value)) {
+    return value.flatMap(configuredPathValues);
+  }
+
+  return [];
+}
+
+function normalizeConfiguredPath(
+  configuredPath: string,
+  root: string | null,
+): string | null {
+  const expanded =
+    configuredPath === '~' || configuredPath.startsWith(`~${path.sep}`)
+      ? path.join(process.env.HOME ?? '', configuredPath.slice(1))
+      : configuredPath;
+
+  if (!expanded) return null;
+
+  return path.resolve(
+    path.isAbsolute(expanded) || !root ? expanded : path.join(root, expanded),
+  );
+}
+
+function isDirectory(filePath: string): boolean {
+  try {
+    return fs.statSync(filePath).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 function filePathFromUri(uri: string): string | null {
   try {
     return fileURLToPath(uri);
   } catch {
     return null;
   }
+}
+
+function sourceKindForUri(uri: string): SourceKind {
+  const filePath = filePathFromUri(uri);
+  return filePath ? sourceKindForPath(filePath) : 'workspace';
+}
+
+function sourceKindForPath(filePath: string): SourceKind {
+  return isStdlibSourcePath(filePath) ? 'stdlib' : 'workspace';
+}
+
+function isIndexedSourcePath(filePath: string): boolean {
+  return (
+    (!!workspaceRoot && isPathInside(filePath, workspaceRoot)) ||
+    stdlibRoots.some((root) => isPathInside(filePath, root))
+  );
+}
+
+function isStdlibSourcePath(filePath: string): boolean {
+  const inWorkspace = !!workspaceRoot && isPathInside(filePath, workspaceRoot);
+
+  return stdlibRoots.some((root) => {
+    if (!isPathInside(filePath, root)) return false;
+
+    if (!inWorkspace) return true;
+
+    return isPathInside(root, workspaceRoot!) && root !== workspaceRoot;
+  });
 }
 
 function isPathInside(child: string, parent: string): boolean {

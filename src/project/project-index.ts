@@ -11,6 +11,7 @@ import type {
   ModuleIndex,
   ParsedDocument,
   ResolveResult,
+  SourceKind,
 } from '../shared/types.js';
 
 export class ProjectIndex {
@@ -216,6 +217,36 @@ export class ProjectIndex {
     position: Position,
   ): C3Symbol | undefined {
     return this.resolveSymbol(currentUri, ref, position).selected;
+  }
+
+  ownerSymbol(symbol: C3Symbol): C3Symbol | undefined {
+    const parsed = this.parsedByUri.get(symbol.uri);
+    if (!parsed) return undefined;
+
+    for (const topLevel of parsed.symbols) {
+      const owner = findOwnerSymbol(topLevel, symbol);
+      if (owner) return owner;
+    }
+
+    return undefined;
+  }
+
+  typeSymbolFor(symbol: C3Symbol): C3Symbol | undefined {
+    if (isTypeSymbol(symbol)) return symbol;
+    if (!symbol.returnType) return undefined;
+
+    const parsed = this.parsedByUri.get(symbol.uri);
+    if (!parsed) return undefined;
+
+    return this.resolveTypeSymbol(
+      parsed,
+      normalizeTypeName(symbol.returnType),
+      symbol.selectionRange.start,
+    );
+  }
+
+  sourceKindForSymbol(symbol: C3Symbol): SourceKind | undefined {
+    return this.parsedByUri.get(symbol.uri)?.sourceKind;
   }
 
   referencesTo(target: C3Symbol): Location[] {
@@ -777,6 +808,20 @@ function flattenSymbols(symbols: C3Symbol[]): C3Symbol[] {
     symbol,
     ...flattenSymbols(symbol.children),
   ]);
+}
+
+function findOwnerSymbol(
+  current: C3Symbol,
+  target: C3Symbol,
+): C3Symbol | undefined {
+  for (const child of current.children) {
+    if (sameSymbol(child, target)) return current;
+
+    const nestedOwner = findOwnerSymbol(child, target);
+    if (nestedOwner) return nestedOwner;
+  }
+
+  return undefined;
 }
 
 function findDeclaredSymbolAt(

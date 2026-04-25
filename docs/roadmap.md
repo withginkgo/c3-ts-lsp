@@ -9,6 +9,8 @@ The server currently provides a working prototype:
 
 - Tree-sitter based parsing for C3 source text.
 - Workspace scanning for `.c3`, `.c3i`, and `.c3t` files.
+- Optional standard library root scanning through initialization options or
+  C3-related environment variables.
 - Workspace file watching for C3 source changes after initialization.
 - A module index keyed by `module` declarations.
 - Top-level symbol extraction for all C3 declaration nodes currently exposed by
@@ -16,6 +18,8 @@ The server currently provides a working prototype:
 - Nested symbol extraction for struct/bitstruct/interface members, enum values,
   constdef values, function parameters, and macro parameters.
 - Basic hover, definition, document symbols, and completions.
+- Rich hover formatting for aggregate bodies, member ownership, and resolved
+  variable type context.
 - Position-aware resolver with import, relative module, module alias,
   visibility, ambiguity, and unresolved-symbol handling.
 - Scope and member-aware hover, definition, completion, diagnostics, and
@@ -29,6 +33,8 @@ The server currently provides a working prototype:
 - Semantic diagnostics for unresolved imports, unresolved module aliases,
   unresolved expression symbols, unresolved members, and ambiguous expression
   symbols.
+- Standard library files participate in resolution but do not publish
+  diagnostics.
 - Syntax diagnostics from tree-sitter parse errors.
 - Small debug scripts for parser tree and symbol inspection.
 - A Node test runner setup covering parser extraction, project indexing, and

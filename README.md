@@ -8,11 +8,14 @@ It also exposes basic diagnostics and references.
 ## Features
 
 - Workspace-wide C3 indexing for `.c3`, `.c3i`, and `.c3t` files.
+- Configurable standard library indexing for imported stdlib modules.
 - Workspace file watching for created, changed, and deleted C3 source files.
 - Document symbols for top-level C3 declarations.
 - Nested document symbols for declaration members, enum values, and parameters.
 - Hover and definition lookup across files in the same project, including
   imported modules, relative module paths, module aliases, and struct members.
+- Rich hover output for aggregate declarations, member ownership, and resolved
+  variable types.
 - Module-aware completions for direct, imported, relative, and aliased module
   paths.
 - Scope-aware completions for parameters, locals, chained expression receivers,
@@ -31,6 +34,7 @@ src/server.ts                 LSP entrypoint and request wiring
 src/lsp/completions.ts        Completion item generation
 src/lsp/document-symbols.ts   DocumentSymbol conversion
 src/lsp/document-refs.ts      Identifier/reference extraction from documents
+src/lsp/hover.ts              Hover formatting
 src/parser/c3-parser.ts       Tree-sitter parsing and symbol extraction
 src/project/project-index.ts  Module index and symbol resolution
 src/workspace/scan.ts         Workspace file discovery and indexing
@@ -64,6 +68,28 @@ build.
 `npm start` runs the compiled server with `--stdio`. Directly running
 `node dist/server.js` is also supported and defaults to stdio when no transport
 argument is supplied.
+
+## Configuration
+
+Standard library scanning is opt-in. Provide one or more stdlib source roots
+through LSP initialization options:
+
+```json
+{
+  "initializationOptions": {
+    "stdlibPath": "/path/to/c3/lib"
+  }
+}
+```
+
+The server also accepts `stdlibPaths`, `standardLibraryPath`,
+`standardLibraryPaths`, `c3StdlibPath`, and `c3StdlibPaths`. Environment
+variables `C3_STDLIB_PATH`, `C3_STDLIB_ROOT`, and
+`C3_STANDARD_LIBRARY_PATH` are also supported. Multiple paths can be separated
+with the platform path delimiter.
+
+If `C3_HOME` or `C3C_HOME` is set, the server tries common library subfolders
+under that root.
 
 ## Versioning and Releases
 
