@@ -155,6 +155,28 @@ test('semanticDiagnostics accepts resolved members', () => {
   assert.deepEqual(semanticDiagnostics(index, parsed), []);
 });
 
+test('semanticDiagnostics accepts self members inside type methods', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'struct EventLoop {',
+      '    bool running;',
+      '}',
+      'fn void EventLoop.init(&self) {',
+      '    self.running = true;',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(semanticDiagnostics(index, parsed), []);
+});
+
 test('semanticDiagnostics reports ambiguous expression symbols', () => {
   const index = new ProjectIndex();
   const appUri = 'file:///workspace/app.c3';

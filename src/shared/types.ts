@@ -17,6 +17,7 @@ export type C3Symbol = {
   documentation?: string;
   attributes: string[];
   returnType?: string;
+  receiverType?: string;
   parameters: string[];
   scopeRange?: Range;
   children: C3Symbol[];

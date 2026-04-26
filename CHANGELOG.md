@@ -55,11 +55,14 @@ All notable project changes are recorded here.
   existing member text after the cursor does not change the suggested members.
 - Made qualified references such as `net::connect` track the terminal symbol
   range so rename edits preserve the module prefix.
+- Made C3 type methods such as `fn void EventLoop.init(&self)` bind `self` to
+  the receiver type and participate in member resolution.
 
 ### Fixed
 
 - Recovered top-level callable symbols from parser-error regions so newer C3
   standard-library macros such as `io::printn` remain resolvable.
+- Fixed unresolved diagnostics for `self.member` inside C3 type methods.
 
 ## [0.2.0] - 2026-04-25
 

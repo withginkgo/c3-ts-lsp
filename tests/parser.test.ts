@@ -193,6 +193,28 @@ test('parseSource extracts nested members, parameters, docs, attrs, and body ran
   assert.deepEqual(add?.parameters, ['int a', 'int b']);
 });
 
+test('parseSource extracts type methods and gives self the receiver type', () => {
+  const source = [
+    'module app;',
+    'struct EventLoop {',
+    '    bool running;',
+    '}',
+    'fn void EventLoop.init(&self)',
+    '{',
+    '    self.running = true;',
+    '}',
+    '',
+  ].join('\n');
+  const parsed = parseSource('file:///workspace/app.c3', source);
+  const method = parsed.symbols.find((symbol) => symbol.name === 'init');
+  const self = parsed.scopedSymbols.find((symbol) => symbol.name === 'self');
+
+  assert.equal(method?.kind, SymbolKind.Method);
+  assert.equal(method?.receiverType, 'EventLoop');
+  assert.equal(method?.signature, 'void EventLoop.init(&self)');
+  assert.equal(self?.returnType, 'EventLoop');
+});
+
 test('parseSource reports tree-sitter syntax diagnostics', () => {
   const parsed = parseSource(
     'file:///workspace/broken.c3',

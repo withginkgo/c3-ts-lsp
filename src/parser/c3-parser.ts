@@ -182,9 +182,10 @@ function scopedSymbolsForCallable(
 ): C3Symbol[] {
   const body = node.childForFieldName('body');
   const scopeRange = rangeFromNode(body ?? node);
+  const receiverType = receiverTypeForCallable(node);
 
   return [
-    ...parameterSymbols(doc, node, moduleName, scopeRange),
+    ...parameterSymbols(doc, node, moduleName, scopeRange, receiverType),
     ...(body ? localDeclarationSymbols(doc, body, moduleName) : []),
   ];
 }
@@ -384,11 +385,15 @@ function functionSymbol(
   const nameNode = header?.childForFieldName('name') ?? extractNameNode(node);
   if (!nameNode) return null;
 
+  const receiverType = receiverTypeForCallable(node);
+
   return createSymbol(doc, rangeNode, nameNode, moduleName, kind, {
+    kind: receiverType ? SymbolKind.Method : kind,
     bodyNode: node.childForFieldName('body') ?? undefined,
-    children: parameterSymbols(doc, node, moduleName),
+    children: parameterSymbols(doc, node, moduleName, undefined, receiverType),
     parameters: parameterSignatures(node),
     returnType: header?.childForFieldName('return_type')?.text,
+    receiverType,
     signature: callableSignature(node, 'func_header', 'func_param_list'),
   });
 }
@@ -402,11 +407,15 @@ function macroSymbol(
   const nameNode = header?.childForFieldName('name') ?? extractNameNode(node);
   if (!nameNode) return null;
 
+  const receiverType = receiverTypeForCallable(node);
+
   return createSymbol(doc, node, nameNode, moduleName, SymbolKind.Function, {
+    kind: receiverType ? SymbolKind.Method : SymbolKind.Function,
     bodyNode: node.childForFieldName('body') ?? undefined,
-    children: parameterSymbols(doc, node, moduleName),
+    children: parameterSymbols(doc, node, moduleName, undefined, receiverType),
     parameters: parameterSignatures(node),
     returnType: header?.childForFieldName('return_type')?.text,
+    receiverType,
     signature: `macro ${callableSignature(
       node,
       'macro_header',
@@ -562,6 +571,7 @@ function parameterSymbols(
   node: SyntaxNode,
   moduleName: string,
   scopeRange?: Range,
+  receiverType?: string,
 ): C3Symbol[] {
   const symbols: C3Symbol[] = [];
 
@@ -572,7 +582,8 @@ function parameterSymbols(
     symbols.push(
       createSymbol(doc, param, nameNode, moduleName, SymbolKind.Variable, {
         signature: declarationSignature(param),
-        returnType: param.childForFieldName('type')?.text,
+        returnType:
+          param.childForFieldName('type')?.text ?? selfType(param, receiverType),
         scopeRange,
       }),
     );
@@ -743,11 +754,13 @@ function createSymbol(
   kind: SymbolKind,
   options: {
     signature: string;
+    kind?: SymbolKind;
     bodyNode?: SyntaxNode;
     children?: C3Symbol[];
     documentation?: string;
     attributes?: string[];
     returnType?: string;
+    receiverType?: string;
     parameters?: string[];
     scopeRange?: Range;
   },
@@ -755,7 +768,7 @@ function createSymbol(
   return {
     name: nameNode.text,
     moduleName,
-    kind,
+    kind: options.kind ?? kind,
     uri: doc.uri,
     range: rangeFromNode(node),
     selectionRange: rangeFromNode(nameNode),
@@ -764,6 +777,7 @@ function createSymbol(
     documentation: options.documentation ?? documentationFor(node),
     attributes: options.attributes ?? attributesFor(node),
     returnType: options.returnType,
+    receiverType: options.receiverType,
     parameters: options.parameters ?? [],
     scopeRange: options.scopeRange,
     children: options.children ?? [],
@@ -817,6 +831,25 @@ function parameterSignatures(node: SyntaxNode): string[] {
   return descendantsOfType(node, 'param').map((param) =>
     compactText(param.text),
   );
+}
+
+function receiverTypeForCallable(node: SyntaxNode): string | undefined {
+  const header =
+    directChildOfType(node, 'func_header') ??
+    directChildOfType(node, 'macro_header');
+
+  return header?.childForFieldName('method_type')?.text;
+}
+
+function selfType(
+  param: SyntaxNode,
+  receiverType: string | undefined,
+): string | undefined {
+  if (!receiverType || param.childForFieldName('name')?.text !== 'self') {
+    return undefined;
+  }
+
+  return receiverType;
 }
 
 function declarationSignature(node: SyntaxNode): string {

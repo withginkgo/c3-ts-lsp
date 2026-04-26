@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
 
+import { SymbolKind } from 'vscode-languageserver/node.js';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 
 import { parseSource } from '../src/parser/c3-parser.js';
@@ -458,6 +459,45 @@ test('ProjectIndex resolves members on call and subscript expression receivers',
   assert.equal(callResult.selected?.signature, 'int value;');
   assert.equal(subscriptResult.reason, 'resolved');
   assert.equal(subscriptResult.selected?.signature, 'int value;');
+});
+
+test('ProjectIndex resolves self members and type methods', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'struct EventLoop {',
+    '    bool running;',
+    '}',
+    'fn void EventLoop.init(&self) {',
+    '    self.running = true;',
+    '}',
+    'fn void use() {',
+    '    EventLoop loop;',
+    '    loop.init();',
+    '}',
+    '',
+  ].join('\n');
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+
+  index.upsert(parseSource(uri, source));
+
+  const selfMember = index.resolveSymbol(
+    uri,
+    'running',
+    doc.positionAt(source.indexOf('running = true')),
+  );
+  const method = index.resolveSymbol(
+    uri,
+    'init',
+    doc.positionAt(source.indexOf('init();')),
+  );
+
+  assert.equal(selfMember.reason, 'resolved');
+  assert.equal(selfMember.selected?.signature, 'bool running;');
+  assert.equal(method.reason, 'resolved');
+  assert.equal(method.selected?.kind, SymbolKind.Method);
+  assert.equal(method.selected?.signature, 'void EventLoop.init(&self)');
 });
 
 test('ProjectIndex selects basic overloads by argument type', () => {

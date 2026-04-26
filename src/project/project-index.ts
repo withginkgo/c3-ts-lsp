@@ -729,7 +729,24 @@ export class ProjectIndex {
       normalizedType,
       position,
     );
-    return typeSymbol?.children ?? [];
+    return [
+      ...(typeSymbol?.children ?? []),
+      ...this.methodSymbolsForTypeName(current, normalizedType, typeSymbol),
+    ];
+  }
+
+  private methodSymbolsForTypeName(
+    current: ParsedDocument,
+    typeName: string,
+    typeSymbol: C3Symbol | undefined,
+  ): C3Symbol[] {
+    return this.visibleSymbols(current)
+      .filter(
+        (symbol) =>
+          symbol.kind === SymbolKind.Method &&
+          receiverTypeMatches(symbol.receiverType, typeName, typeSymbol),
+      )
+      .sort(compareSymbols);
   }
 
   private resolveTypeSymbol(
@@ -1438,6 +1455,27 @@ function symbolTypeName(symbol: C3Symbol | undefined): string | undefined {
   }
 
   return undefined;
+}
+
+function receiverTypeMatches(
+  receiverType: string | undefined,
+  typeName: string,
+  typeSymbol: C3Symbol | undefined,
+): boolean {
+  if (!receiverType) return false;
+
+  const receiver = normalizeTypeName(receiverType);
+  const target = normalizeTypeName(typeName);
+
+  return (
+    receiver === target ||
+    receiver === typeSymbol?.name ||
+    terminalTypeName(receiver) === terminalTypeName(target)
+  );
+}
+
+function terminalTypeName(typeName: string): string {
+  return typeName.split('::').at(-1) ?? typeName;
 }
 
 function isTypeSymbol(symbol: C3Symbol): boolean {
