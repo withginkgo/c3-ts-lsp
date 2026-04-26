@@ -351,6 +351,11 @@ function stdlibPathsFromInitializationOptions(options: unknown): string[] {
     record.standardLibraryPaths,
     record.c3StdlibPath,
     record.c3StdlibPaths,
+    // 适配 C3 Language Support 插件实际传的 key
+    record['stdlib-path'],
+    record['c3.stdlib-path'],          // 插件用这个
+    record['c3.stdlibPath'],           // 可能有的拼法
+    record['c3.standardLibraryPath'],  // 极端情况
   ];
 
   return values.flatMap(configuredPathValues);

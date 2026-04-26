@@ -207,3 +207,46 @@ test('parseSource reports tree-sitter syntax diagnostics', () => {
   );
   assert.equal(parsed.diagnostics[0]?.source, 'tree-sitter-c3');
 });
+
+test('parseSource recovers top-level callables after parser errors', () => {
+  const parsed = parseSource(
+    'file:///workspace/std/io.c3',
+    [
+      'module std::io;',
+      '???',
+      'macro void printn(x = "")',
+      '{',
+      '}',
+      'fn sz? printfn(String format, args...) @format(0) @maydiscard',
+      '{',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  assert.deepEqual(
+    parsed.symbols.map((symbol) => [
+      symbol.name,
+      symbol.kind,
+      symbol.signature,
+      symbol.returnType,
+      symbol.parameters,
+    ]),
+    [
+      [
+        'printn',
+        SymbolKind.Function,
+        'macro void printn(x = "")',
+        'void',
+        ['x = ""'],
+      ],
+      [
+        'printfn',
+        SymbolKind.Function,
+        'fn sz? printfn(String format, args...) @format(0) @maydiscard',
+        'sz?',
+        ['String format', 'args...'],
+      ],
+    ],
+  );
+});

@@ -34,7 +34,13 @@ export function parseSource(
   const importSpecs = extractImportSpecs(tree.rootNode);
   const imports = importSpecs.map((imp) => imp.path);
   const moduleAliases = extractModuleAliases(doc, tree.rootNode);
-  const symbols = extractTopLevelSymbols(doc, tree.rootNode, moduleName);
+  const parsedSymbols = extractTopLevelSymbols(doc, tree.rootNode, moduleName);
+  const symbols = tree.rootNode.hasError
+    ? mergeRecoveredSymbols(
+        parsedSymbols,
+        recoverTopLevelCallableSymbols(doc, source, moduleName),
+      )
+    : parsedSymbols;
   const scopedSymbols = extractScopedSymbols(doc, tree.rootNode, moduleName);
   const diagnostics = collectSyntaxDiagnostics(tree.rootNode);
 
@@ -640,6 +646,95 @@ function localDeclarationSymbols(
   return symbols;
 }
 
+function recoverTopLevelCallableSymbols(
+  doc: TextDocument,
+  source: string,
+  moduleName: string,
+): C3Symbol[] {
+  const symbols: C3Symbol[] = [];
+  const callableStart = /(^|\n)(?:extern\s+)?(?:fn|macro)\s+/g;
+
+  let match: RegExpExecArray | null;
+  while ((match = callableStart.exec(source))) {
+    const startIndex = match.index + match[1].length;
+
+    if (braceDepthBefore(source, startIndex) !== 0) continue;
+
+    const symbol = recoverCallableSymbol(doc, source, moduleName, startIndex);
+    if (symbol) symbols.push(symbol);
+  }
+
+  return symbols;
+}
+
+function recoverCallableSymbol(
+  doc: TextDocument,
+  source: string,
+  moduleName: string,
+  startIndex: number,
+): C3Symbol | null {
+  const endIndex = callableHeaderEndIndex(source, startIndex);
+  const header = source.slice(startIndex, endIndex).trim();
+  const prefix = header.match(/^(?:extern\s+)?(?:fn|macro)\s+/)?.[0];
+  const paramsStart = header.indexOf('(');
+
+  if (!prefix || paramsStart < 0) return null;
+
+  const beforeParams = header.slice(prefix.length, paramsStart).trim();
+  const fullName = beforeParams.split(/\s+/).at(-1);
+  if (!fullName) return null;
+
+  const name = fullName.split('.').at(-1);
+  if (!name || !/^[A-Za-z_$@][A-Za-z0-9_$@]*$/.test(name)) return null;
+
+  const fullNameStart = source.indexOf(fullName, startIndex + prefix.length);
+  if (fullNameStart < 0) return null;
+
+  const nameStart = fullNameStart + fullName.lastIndexOf(name);
+  const params = parameterListText(header, paramsStart);
+
+  return {
+    name,
+    moduleName,
+    kind: SymbolKind.Function,
+    uri: doc.uri,
+    range: rangeFromOffsets(doc, startIndex, endIndex),
+    selectionRange: rangeFromOffsets(doc, nameStart, nameStart + name.length),
+    signature: compactText(header),
+    documentation: undefined,
+    attributes: attributesFromText(header),
+    returnType: beforeParams.slice(0, -fullName.length).trim() || undefined,
+    parameters: params ? splitTopLevelParameters(params) : [],
+    children: [],
+  };
+}
+
+function mergeRecoveredSymbols(
+  parsedSymbols: C3Symbol[],
+  recoveredSymbols: C3Symbol[],
+): C3Symbol[] {
+  const seen = new Set(parsedSymbols.map(symbolIdentity));
+
+  return [
+    ...parsedSymbols,
+    ...recoveredSymbols.filter((symbol) => {
+      const identity = symbolIdentity(symbol);
+      if (seen.has(identity)) return false;
+
+      seen.add(identity);
+      return true;
+    }),
+  ];
+}
+
+function symbolIdentity(symbol: C3Symbol): string {
+  return [
+    symbol.name,
+    symbol.selectionRange.start.line,
+    symbol.selectionRange.start.character,
+  ].join(':');
+}
+
 function createSymbol(
   doc: TextDocument,
   node: SyntaxNode,
@@ -819,6 +914,10 @@ function attributesFor(node: SyntaxNode): string[] {
   return attributes;
 }
 
+function attributesFromText(text: string): string[] {
+  return text.match(/@[A-Za-z_][A-Za-z0-9_]*/g) ?? [];
+}
+
 function collectSyntaxDiagnostics(root: SyntaxNode): Diagnostic[] {
   const diagnostics: Diagnostic[] = [];
 
@@ -846,6 +945,192 @@ function collectSyntaxDiagnostics(root: SyntaxNode): Diagnostic[] {
   visit(root);
 
   return diagnostics;
+}
+
+function callableHeaderEndIndex(source: string, startIndex: number): number {
+  let parenDepth = 0;
+  const state: LexState = {};
+
+  for (let index = startIndex; index < source.length; index++) {
+    const char = source[index];
+
+    if (updateLexState(source, index, state)) continue;
+    if (state.lineComment || state.blockComment || state.stringQuote) continue;
+
+    if (char === '(') {
+      parenDepth++;
+      continue;
+    }
+
+    if (char === ')') {
+      parenDepth = Math.max(0, parenDepth - 1);
+      continue;
+    }
+
+    if (parenDepth === 0) {
+      if (char === '{' || char === ';') return index;
+      if (char === '=' && source[index + 1] === '>') return index;
+    }
+  }
+
+  return source.length;
+}
+
+function parameterListText(
+  header: string,
+  paramsStart: number,
+): string | undefined {
+  let depth = 0;
+  const state: LexState = {};
+
+  for (let index = paramsStart; index < header.length; index++) {
+    const char = header[index];
+
+    if (updateLexState(header, index, state)) continue;
+    if (state.lineComment || state.blockComment || state.stringQuote) continue;
+
+    if (char === '(') {
+      depth++;
+      continue;
+    }
+
+    if (char === ')') {
+      depth--;
+      if (depth === 0) return header.slice(paramsStart + 1, index);
+    }
+  }
+
+  return undefined;
+}
+
+function splitTopLevelParameters(text: string): string[] {
+  const parameters: string[] = [];
+  const state: LexState = {};
+  let depth = 0;
+  let start = 0;
+
+  for (let index = 0; index < text.length; index++) {
+    const char = text[index];
+
+    if (updateLexState(text, index, state)) continue;
+    if (state.lineComment || state.blockComment || state.stringQuote) continue;
+
+    if (char === '(' || char === '[' || char === '{') {
+      depth++;
+      continue;
+    }
+
+    if (char === ')' || char === ']' || char === '}') {
+      depth = Math.max(0, depth - 1);
+      continue;
+    }
+
+    if (char === ',' && depth === 0) {
+      const parameter = compactText(text.slice(start, index));
+      if (parameter) parameters.push(parameter);
+      start = index + 1;
+    }
+  }
+
+  const last = compactText(text.slice(start));
+  if (last) parameters.push(last);
+
+  return parameters;
+}
+
+function braceDepthBefore(source: string, offset: number): number {
+  let depth = 0;
+  const state: LexState = {};
+
+  for (let index = 0; index < offset; index++) {
+    const char = source[index];
+
+    if (updateLexState(source, index, state)) continue;
+    if (state.lineComment || state.blockComment || state.stringQuote) continue;
+
+    if (char === '{') depth++;
+    if (char === '}') depth = Math.max(0, depth - 1);
+  }
+
+  return depth;
+}
+
+type LexState = {
+  lineComment?: boolean;
+  blockComment?: string;
+  stringQuote?: string;
+  escaped?: boolean;
+};
+
+function updateLexState(
+  source: string,
+  index: number,
+  state: LexState,
+): boolean {
+  const char = source[index];
+  const next = source[index + 1];
+
+  if (state.lineComment) {
+    if (char === '\n') state.lineComment = false;
+    return true;
+  }
+
+  if (state.blockComment) {
+    if (
+      (state.blockComment === '*/' && char === '*' && next === '/') ||
+      (state.blockComment === '*>' && char === '*' && next === '>')
+    ) {
+      state.blockComment = undefined;
+    }
+    return true;
+  }
+
+  if (state.stringQuote) {
+    if (state.escaped) {
+      state.escaped = false;
+      return true;
+    }
+
+    if (state.stringQuote !== '`' && char === '\\') {
+      state.escaped = true;
+      return true;
+    }
+
+    if (char === state.stringQuote) {
+      state.stringQuote = undefined;
+    }
+    return true;
+  }
+
+  if (char === '/' && next === '/') {
+    state.lineComment = true;
+    return true;
+  }
+
+  if (char === '/' && next === '*') {
+    state.blockComment = '*/';
+    return true;
+  }
+
+  if (char === '<' && next === '*') {
+    state.blockComment = '*>';
+    return true;
+  }
+
+  if (char === '"' || char === "'" || char === '`') {
+    state.stringQuote = char;
+    return true;
+  }
+
+  return false;
+}
+
+function rangeFromOffsets(
+  doc: TextDocument,
+  startIndex: number,
+  endIndex: number,
+): Range {
+  return Range.create(doc.positionAt(startIndex), doc.positionAt(endIndex));
 }
 
 function compactText(text: string): string {

@@ -342,50 +342,53 @@ export class ProjectIndex {
     ref: string,
   ): C3Symbol[] {
     const parts = ref.split('::');
-
     if (parts.length < 2) return [];
 
     const symbolName = parts[parts.length - 1];
     const modulePrefix = parts.slice(0, -1).join('::');
 
+    // 1. 直接按完整模块名查找
     const directModule = this.modulesByName.get(modulePrefix);
-    const direct =
-      directModule?.allSymbols
-        .get(symbolName)
-        ?.filter((symbol) => isVisibleFrom(symbol, current.moduleName)) ?? [];
-
-    if (direct.length > 0) return direct;
-
-    const currentModule = this.modulesByName.get(current.moduleName);
-
-    const aliased = currentModule?.moduleAliases.get(modulePrefix);
-    if (aliased) {
+    if (directModule) {
       return (
-        this.resolveImportedModule(current, aliased)
-          ?.allSymbols.get(symbolName)
+        directModule.allSymbols
+          .get(symbolName)
           ?.filter((symbol) => isVisibleFrom(symbol, current.moduleName)) ?? []
       );
     }
 
-    if (currentModule) {
-      const imported: C3Symbol[] = [];
+    const currentModule = this.modulesByName.get(current.moduleName);
 
-      for (const imp of currentModule.imports) {
-        const lastSegment = imp.split('::').at(-1);
-
-        if (lastSegment === modulePrefix) {
-          const importedModule = this.resolveImportedModule(current, imp);
-          imported.push(
-            ...(importedModule?.allSymbols.get(symbolName) ?? []).filter(
-              (symbol) => isVisibleFrom(symbol, current.moduleName),
-            ),
-          );
-        }
+    // 2. 检查模块别名
+    const aliased = currentModule?.moduleAliases.get(modulePrefix);
+    if (aliased) {
+      const aliasedModule = this.resolveImportedModule(current, aliased);
+      if (aliasedModule) {
+        return (
+          aliasedModule.allSymbols
+            .get(symbolName)
+            ?.filter((symbol) => isVisibleFrom(symbol, current.moduleName)) ?? []
+        );
       }
-
-      if (imported.length > 0) return imported;
     }
 
+    // 3. 如果 modulePrefix 不含双冒号，尝试匹配导入的最后一段（例如 io -> std::io）
+    if (currentModule && !modulePrefix.includes('::')) {
+      for (const imp of currentModule.imports) {
+        const lastSegment = imp.split('::').at(-1);
+        if (lastSegment === modulePrefix) {
+          const importedModule = this.resolveImportedModule(current, imp);
+          if (importedModule) {
+            const symbols = importedModule.allSymbols
+              .get(symbolName)
+              ?.filter((symbol) => isVisibleFrom(symbol, current.moduleName)) ?? [];
+            if (symbols.length > 0) return symbols;
+          }
+        }
+      }
+    }
+
+    // 4. 尝试当前模块的相对路径解析
     const relativeModuleName = `${current.moduleName}::${modulePrefix}`;
     const relativeModule = this.modulesByName.get(relativeModuleName);
     return relativeModule?.allSymbols.get(symbolName) ?? [];

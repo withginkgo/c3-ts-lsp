@@ -71,6 +71,41 @@ test('semanticDiagnostics reports unresolved expression symbols', () => {
   );
 });
 
+test('semanticDiagnostics resolves qualified imported macros recovered from stdlib parse errors', () => {
+  const index = new ProjectIndex();
+  const appUri = 'file:///workspace/app.c3';
+  const stdlibUri = 'file:///stdlib/std/io.c3';
+  const app = parseSource(
+    appUri,
+    [
+      'module app;',
+      'import std::io;',
+      'fn void use() {',
+      '    io::printn("hello");',
+      '}',
+      '',
+    ].join('\n'),
+  );
+  const stdlib = parseSource(
+    stdlibUri,
+    [
+      'module std::io;',
+      '???',
+      'macro void printn(x = "")',
+      '{',
+      '}',
+      '',
+    ].join('\n'),
+    { sourceKind: 'stdlib' },
+  );
+
+  index.upsert(app, false);
+  index.upsert(stdlib, false);
+  index.rebuild();
+
+  assert.deepEqual(semanticDiagnostics(index, app), []);
+});
+
 test('semanticDiagnostics reports unresolved members', () => {
   const index = new ProjectIndex();
   const uri = 'file:///workspace/app.c3';
