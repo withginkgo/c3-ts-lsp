@@ -574,16 +574,26 @@ function parameterSymbols(
   receiverType?: string,
 ): C3Symbol[] {
   const symbols: C3Symbol[] = [];
+  let receiverParamAssigned = false;
 
   for (const param of descendantsOfType(node, 'param')) {
     const nameNode = param.childForFieldName('name');
     if (!nameNode) continue;
 
+    const explicitType = param.childForFieldName('type')?.text;
+    const inferredReceiverType =
+      !explicitType && receiverType && !receiverParamAssigned
+        ? receiverType
+        : undefined;
+
+    if (inferredReceiverType) {
+      receiverParamAssigned = true;
+    }
+
     symbols.push(
       createSymbol(doc, param, nameNode, moduleName, SymbolKind.Variable, {
         signature: declarationSignature(param),
-        returnType:
-          param.childForFieldName('type')?.text ?? selfType(param, receiverType),
+        returnType: explicitType ?? inferredReceiverType,
         scopeRange,
       }),
     );
@@ -695,7 +705,13 @@ function recoverCallableSymbol(
   const fullName = beforeParams.split(/\s+/).at(-1);
   if (!fullName) return null;
 
-  const name = fullName.split('.').at(-1);
+  const methodSeparator = fullName.lastIndexOf('.');
+  const receiverType =
+    methodSeparator > 0 ? fullName.slice(0, methodSeparator) : undefined;
+  const name =
+    methodSeparator > 0
+      ? fullName.slice(methodSeparator + 1)
+      : fullName.split('.').at(-1);
   if (!name || !/^[A-Za-z_$@][A-Za-z0-9_$@]*$/.test(name)) return null;
 
   const fullNameStart = source.indexOf(fullName, startIndex + prefix.length);
@@ -703,11 +719,14 @@ function recoverCallableSymbol(
 
   const nameStart = fullNameStart + fullName.lastIndexOf(name);
   const params = parameterListText(header, paramsStart);
+  const parameterTexts = params ? splitTopLevelParameters(params) : [];
+  const paramsStartOffset =
+    startIndex + source.slice(startIndex, endIndex).indexOf('(') + 1;
 
   return {
     name,
     moduleName,
-    kind: SymbolKind.Function,
+    kind: receiverType ? SymbolKind.Method : SymbolKind.Function,
     uri: doc.uri,
     range: rangeFromOffsets(doc, startIndex, endIndex),
     selectionRange: rangeFromOffsets(doc, nameStart, nameStart + name.length),
@@ -715,8 +734,96 @@ function recoverCallableSymbol(
     documentation: undefined,
     attributes: attributesFromText(header),
     returnType: beforeParams.slice(0, -fullName.length).trim() || undefined,
-    parameters: params ? splitTopLevelParameters(params) : [],
-    children: [],
+    receiverType,
+    parameters: parameterTexts,
+    children: recoveredParameterSymbols(
+      doc,
+      source,
+      moduleName,
+      parameterTexts,
+      paramsStartOffset,
+      receiverType,
+    ),
+  };
+}
+
+function recoveredParameterSymbols(
+  doc: TextDocument,
+  source: string,
+  moduleName: string,
+  parameters: string[],
+  paramsStartOffset: number,
+  receiverType: string | undefined,
+): C3Symbol[] {
+  const symbols: C3Symbol[] = [];
+  let searchOffset = paramsStartOffset;
+
+  for (let index = 0; index < parameters.length; index++) {
+    const parameter = parameters[index];
+    const info = recoveredParameterInfo(parameter, index, receiverType);
+    if (!info) continue;
+
+    const parameterOffset = source.indexOf(parameter, searchOffset);
+    const rangeStart =
+      parameterOffset >= 0 ? parameterOffset : paramsStartOffset;
+    const nameOffset =
+      parameterOffset >= 0
+        ? source.indexOf(info.name, parameterOffset)
+        : rangeStart;
+
+    symbols.push({
+      name: info.name,
+      moduleName,
+      kind: SymbolKind.Variable,
+      uri: doc.uri,
+      range: rangeFromOffsets(doc, rangeStart, rangeStart + parameter.length),
+      selectionRange: rangeFromOffsets(
+        doc,
+        nameOffset,
+        nameOffset + info.name.length,
+      ),
+      signature: parameter,
+      documentation: undefined,
+      attributes: [],
+      returnType: info.type,
+      parameters: [],
+      children: [],
+    });
+
+    if (parameterOffset >= 0) {
+      searchOffset = parameterOffset + parameter.length;
+    }
+  }
+
+  return symbols;
+}
+
+function recoveredParameterInfo(
+  parameter: string,
+  index: number,
+  receiverType: string | undefined,
+): { name: string; type?: string } | undefined {
+  if (parameter === '...' || parameter.length === 0) return undefined;
+
+  const withoutDefault = parameter.split('=')[0]?.trim() ?? parameter;
+  const receiver = withoutDefault.match(/^&?([A-Za-z_$@][A-Za-z0-9_$@]*)$/);
+
+  if (receiver) {
+    return {
+      name: receiver[1],
+      type: index === 0 ? receiverType : undefined,
+    };
+  }
+
+  const match = withoutDefault.match(
+    /^(?<type>.+?)\s+(?<name>[A-Za-z_$@][A-Za-z0-9_$@]*)(?:\.\.\.)?$/,
+  );
+
+  if (!match?.groups) return undefined;
+
+  return {
+    name: match.groups.name,
+    type: match.groups.type.trim(),
   };
 }
 
@@ -839,17 +946,6 @@ function receiverTypeForCallable(node: SyntaxNode): string | undefined {
     directChildOfType(node, 'macro_header');
 
   return header?.childForFieldName('method_type')?.text;
-}
-
-function selfType(
-  param: SyntaxNode,
-  receiverType: string | undefined,
-): string | undefined {
-  if (!receiverType || param.childForFieldName('name')?.text !== 'self') {
-    return undefined;
-  }
-
-  return receiverType;
 }
 
 function declarationSignature(node: SyntaxNode): string {

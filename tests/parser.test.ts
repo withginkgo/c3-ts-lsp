@@ -272,3 +272,50 @@ test('parseSource recovers top-level callables after parser errors', () => {
     ],
   );
 });
+
+test('parseSource recovers type methods after parser errors', () => {
+  const parsed = parseSource(
+    'file:///workspace/std/collections/map.c3',
+    [
+      'module std::collections::map <Key, Value>;',
+      '???',
+      'fn HashMap* HashMap.init(&self, Allocator allocator)',
+      '{',
+      '}',
+      'fn bool HashMap.set(&map, Key key, Value value) @operator([]=)',
+      '{',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  assert.deepEqual(
+    parsed.symbols.map((symbol) => [
+      symbol.name,
+      symbol.kind,
+      symbol.receiverType,
+      symbol.children.map((child) => [child.name, child.returnType]),
+    ]),
+    [
+      [
+        'init',
+        SymbolKind.Method,
+        'HashMap',
+        [
+          ['self', 'HashMap'],
+          ['allocator', 'Allocator'],
+        ],
+      ],
+      [
+        'set',
+        SymbolKind.Method,
+        'HashMap',
+        [
+          ['map', 'HashMap'],
+          ['key', 'Key'],
+          ['value', 'Value'],
+        ],
+      ],
+    ],
+  );
+});

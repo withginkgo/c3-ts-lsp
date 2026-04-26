@@ -210,6 +210,102 @@ test('semanticDiagnostics accepts generic receiver methods on self fields', () =
   assert.deepEqual(semanticDiagnostics(index, parsed), []);
 });
 
+test('semanticDiagnostics accepts recovered stdlib receiver methods on generic self fields', () => {
+  const index = new ProjectIndex();
+  const registry = parseSource(
+    'file:///workspace/event_loop.c3',
+    [
+      'module poll_demo;',
+      'import std::net;',
+      'import std::collections::map;',
+      'import std::collections::list;',
+      'struct Handlers {}',
+      'struct Poll {',
+      '    NativeSocket socket;',
+      '    PollSubscribe events;',
+      '    PollEvent revents;',
+      '}',
+      'struct EventLoop {',
+      '    HashMap{NativeSocket, Handlers} handlers;',
+      '    List{Poll} polls;',
+      '    bool running;',
+      '}',
+      '',
+    ].join('\n'),
+  );
+  const app = parseSource(
+    'file:///workspace/init_and_register.c3',
+    [
+      'module poll_demo;',
+      'import std::net;',
+      'fn void EventLoop.init(&self) {',
+      '    self.handlers.init();',
+      '    self.polls.init();',
+      '    self.running = true;',
+      '}',
+      'fn void? EventLoop.register(&self, Socket* sock, Handlers h, PollSubscribe interest) {',
+      '    sock.sock.set_non_blocking(true)!;',
+      '    self.handlers.set(sock.sock, h);',
+      '    self.polls.push(Poll{ sock.sock, interest, (PollEvent)0 });',
+      '}',
+      '',
+    ].join('\n'),
+  );
+  const map = parseSource(
+    'file:///stdlib/std/collections/hashmap.c3',
+    [
+      'module std::collections::map <Key, Value>;',
+      '???',
+      'fn HashMap* HashMap.init(&self, Allocator allocator) {}',
+      'fn bool HashMap.set(&map, Key key, Value value) @operator([]=) {}',
+      '',
+    ].join('\n'),
+    { sourceKind: 'stdlib' },
+  );
+  const list = parseSource(
+    'file:///stdlib/std/collections/list.c3',
+    [
+      'module std::collections::list <Type>;',
+      '???',
+      'fn List* List.init(&self, Allocator allocator) {}',
+      'fn void List.push(&self, Type element) {}',
+      '',
+    ].join('\n'),
+    { sourceKind: 'stdlib' },
+  );
+  const net = parseSource(
+    'file:///stdlib/std/net/socket.c3',
+    [
+      'module std::net;',
+      'import std::net::os;',
+      'struct Socket {',
+      '    NativeSocket sock;',
+      '}',
+      'constdef PollSubscribe : ushort { READ }',
+      'constdef PollEvent : ushort { READ }',
+      '',
+    ].join('\n'),
+    { sourceKind: 'stdlib' },
+  );
+  const netOs = parseSource(
+    'file:///stdlib/std/net/os/posix.c3',
+    [
+      'module std::net::os;',
+      'typedef NativeSocket = inline Fd;',
+      'macro void? NativeSocket.set_non_blocking(self, bool non_blocking) {}',
+      '',
+    ].join('\n'),
+    { sourceKind: 'stdlib' },
+  );
+
+  for (const parsed of [registry, app, map, list, net, netOs]) {
+    index.upsert(parsed, false);
+  }
+  index.rebuild();
+
+  assert.deepEqual(semanticDiagnostics(index, app), []);
+});
+
 test('semanticDiagnostics reports ambiguous expression symbols', () => {
   const index = new ProjectIndex();
   const appUri = 'file:///workspace/app.c3';

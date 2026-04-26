@@ -59,6 +59,12 @@ All notable project changes are recorded here.
   the receiver type and participate in member resolution.
 - Made member resolution derive a nominal base type from generic receiver types
   such as `HashMap{K, V}` and `List{T}` before matching type methods.
+- Made recovered callables from parser-error regions preserve C3 receiver
+  types, so stdlib methods on `HashMap`, `List`, and similar generic
+  containers participate in member resolution.
+- Made type-method lookup follow imported module dependencies when resolving
+  receiver methods such as `NativeSocket.set_non_blocking` exposed through
+  `std::net`.
 
 ### Fixed
 
@@ -67,6 +73,9 @@ All notable project changes are recorded here.
 - Fixed unresolved diagnostics for `self.member` inside C3 type methods.
 - Fixed unresolved diagnostics for method calls on generic fields such as
   `self.handlers.init()` and `self.polls.init()`.
+- Fixed unresolved diagnostics for recovered stdlib receiver methods used
+  through generic fields, including `self.handlers.set(...)`,
+  `self.polls.push(...)`, and `sock.sock.set_non_blocking(...)`.
 
 ## [0.2.0] - 2026-04-25
 

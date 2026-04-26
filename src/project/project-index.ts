@@ -59,10 +59,7 @@ export class ProjectIndex {
     current: ParsedDocument,
     importPath: string,
   ): ModuleIndex | undefined {
-    return (
-      this.modulesByName.get(importPath) ??
-      this.modulesByName.get(`${current.moduleName}::${importPath}`)
-    );
+    return this.resolveImportFromModule(current.moduleName, importPath);
   }
 
   moduleCount(): number {
@@ -747,13 +744,13 @@ export class ProjectIndex {
     typeName: string,
     typeSymbol: C3Symbol | undefined,
   ): C3Symbol[] {
-    return this.visibleSymbols(current)
-      .filter(
+    return uniqueMethodSymbols(
+      this.visibleSymbolsForMemberLookup(current).filter(
         (symbol) =>
           symbol.kind === SymbolKind.Method &&
           receiverTypeMatches(symbol.receiverType, typeName, typeSymbol),
-      )
-      .sort(compareSymbols);
+      ),
+    ).sort(compareSymbols);
   }
 
   private resolveTypeSymbol(
@@ -768,6 +765,59 @@ export class ProjectIndex {
     return resultFromCandidates(
       candidates.filter((symbol) => isTypeSymbol(symbol)),
     ).selected;
+  }
+
+  private visibleSymbolsForMemberLookup(current: ParsedDocument): C3Symbol[] {
+    const currentModule = this.modulesByName.get(current.moduleName);
+    if (!currentModule) return [];
+
+    const symbols = [...currentModule.symbols.values()].flat();
+    const visited = new Set([currentModule.name]);
+
+    this.collectImportedSymbols(
+      currentModule,
+      current.moduleName,
+      symbols,
+      visited,
+    );
+
+    return symbols;
+  }
+
+  private collectImportedSymbols(
+    mod: ModuleIndex,
+    requesterModuleName: string,
+    symbols: C3Symbol[],
+    visited: Set<string>,
+  ): void {
+    for (const imp of mod.imports) {
+      const importedModule = this.resolveImportFromModule(mod.name, imp);
+      if (!importedModule || visited.has(importedModule.name)) continue;
+
+      visited.add(importedModule.name);
+      symbols.push(
+        ...[...importedModule.symbols.values()]
+          .flat()
+          .filter((symbol) => isVisibleFrom(symbol, requesterModuleName)),
+      );
+
+      this.collectImportedSymbols(
+        importedModule,
+        requesterModuleName,
+        symbols,
+        visited,
+      );
+    }
+  }
+
+  private resolveImportFromModule(
+    moduleName: string,
+    importPath: string,
+  ): ModuleIndex | undefined {
+    return (
+      this.modulesByName.get(importPath) ??
+      this.modulesByName.get(`${moduleName}::${importPath}`)
+    );
   }
 
   private rebuildAffectedModules(
@@ -1141,6 +1191,30 @@ function resultFromCandidates(candidates: C3Symbol[]): ResolveResult {
     candidates: orderedCandidates,
     reason: 'ambiguous',
   };
+}
+
+function uniqueMethodSymbols(symbols: C3Symbol[]): C3Symbol[] {
+  const seen = new Set<string>();
+  const unique: C3Symbol[] = [];
+
+  for (const symbol of symbols) {
+    const key = methodShapeKey(symbol);
+    if (seen.has(key)) continue;
+
+    seen.add(key);
+    unique.push(symbol);
+  }
+
+  return unique;
+}
+
+function methodShapeKey(symbol: C3Symbol): string {
+  return [
+    terminalTypeName(symbol.receiverType ?? ''),
+    symbol.name,
+    normalizeTypeName(symbol.returnType ?? ''),
+    parameterTypes(symbol).map(normalizeTypeName).join(','),
+  ].join('|');
 }
 
 function compareSymbols(a: C3Symbol, b: C3Symbol): number {
