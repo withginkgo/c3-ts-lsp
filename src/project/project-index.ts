@@ -13,6 +13,13 @@ import type {
   ResolveResult,
   SourceKind,
 } from '../shared/types.js';
+import {
+  collectionElementTypeName,
+  nominalTypeName,
+  normalizeTypeName,
+  terminalTypeName,
+  typeNamesCompatible,
+} from '../shared/type-ref.js';
 
 export class ProjectIndex {
   private readonly parsedByUri = new Map<string, ParsedDocument>();
@@ -294,7 +301,7 @@ export class ProjectIndex {
 
     return this.resolveTypeSymbol(
       parsed,
-      normalizeTypeName(symbol.returnType),
+      nominalTypeName(symbol.returnType),
       symbol.selectionRange.start,
     );
   }
@@ -541,7 +548,7 @@ export class ProjectIndex {
       if (!argument) return undefined;
 
       const indexedType = this.expressionTypeName(current, argument, position);
-      return indexedType ? elementTypeName(indexedType) : undefined;
+      return indexedType ? collectionElementTypeName(indexedType) : undefined;
     }
 
     if (expression.type === 'paren_expr') {
@@ -600,7 +607,7 @@ export class ProjectIndex {
       typeName = member?.returnType;
 
       if (typeName && memberAccess.indexed) {
-        typeName = elementTypeName(typeName);
+        typeName = collectionElementTypeName(typeName);
       }
     }
 
@@ -653,7 +660,7 @@ export class ProjectIndex {
         subscript.base,
         position,
       );
-      return baseType ? elementTypeName(baseType) : undefined;
+      return baseType ? collectionElementTypeName(baseType) : undefined;
     }
 
     const call = splitCallExpression(text);
@@ -709,7 +716,7 @@ export class ProjectIndex {
 
     const typed = sameArity.filter((candidate) =>
       parameterTypes(candidate).every((paramType, index) =>
-        typesCompatible(argTypes[index], paramType),
+        typeNamesCompatible(argTypes[index], paramType),
       ),
     );
 
@@ -721,17 +728,17 @@ export class ProjectIndex {
     typeName: string,
     position: Position,
   ): C3Symbol[] {
-    const normalizedType = normalizeTypeName(typeName);
-    if (!normalizedType) return [];
+    const nominalType = nominalTypeName(typeName);
+    if (!nominalType) return [];
 
     const typeSymbol = this.resolveTypeSymbol(
       current,
-      normalizedType,
+      nominalType,
       position,
     );
     return [
       ...(typeSymbol?.children ?? []),
-      ...this.methodSymbolsForTypeName(current, normalizedType, typeSymbol),
+      ...this.methodSymbolsForTypeName(current, typeName, typeSymbol),
     ];
   }
 
@@ -1096,15 +1103,6 @@ function parameterTypes(symbol: C3Symbol): string[] {
   });
 }
 
-function typesCompatible(
-  actual: string | undefined,
-  expected: string | undefined,
-): boolean {
-  if (!actual || !expected) return false;
-
-  return normalizeTypeName(actual) === normalizeTypeName(expected);
-}
-
 function literalTypeName(node: SyntaxNode): string | undefined {
   switch (node.type) {
     case 'integer_literal':
@@ -1435,18 +1433,6 @@ function offsetAt(source: string, position: Position): number {
   return source.length;
 }
 
-function elementTypeName(typeName: string): string {
-  return normalizeTypeName(typeName);
-}
-
-function normalizeTypeName(typeName: string): string {
-  return typeName
-    .replace(/\b(?:const|volatile)\s+/g, '')
-    .replace(/\[[^\]]*\]/g, '')
-    .replace(/[*!?~]+/g, '')
-    .trim();
-}
-
 function symbolTypeName(symbol: C3Symbol | undefined): string | undefined {
   if (!symbol) return undefined;
 
@@ -1464,18 +1450,14 @@ function receiverTypeMatches(
 ): boolean {
   if (!receiverType) return false;
 
-  const receiver = normalizeTypeName(receiverType);
-  const target = normalizeTypeName(typeName);
+  const receiver = nominalTypeName(receiverType);
+  const target = nominalTypeName(typeName);
 
   return (
     receiver === target ||
     receiver === typeSymbol?.name ||
     terminalTypeName(receiver) === terminalTypeName(target)
   );
-}
-
-function terminalTypeName(typeName: string): string {
-  return typeName.split('::').at(-1) ?? typeName;
 }
 
 function isTypeSymbol(symbol: C3Symbol): boolean {

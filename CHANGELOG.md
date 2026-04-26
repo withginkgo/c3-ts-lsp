@@ -57,12 +57,16 @@ All notable project changes are recorded here.
   range so rename edits preserve the module prefix.
 - Made C3 type methods such as `fn void EventLoop.init(&self)` bind `self` to
   the receiver type and participate in member resolution.
+- Made member resolution derive a nominal base type from generic receiver types
+  such as `HashMap{K, V}` and `List{T}` before matching type methods.
 
 ### Fixed
 
 - Recovered top-level callable symbols from parser-error regions so newer C3
   standard-library macros such as `io::printn` remain resolvable.
 - Fixed unresolved diagnostics for `self.member` inside C3 type methods.
+- Fixed unresolved diagnostics for method calls on generic fields such as
+  `self.handlers.init()` and `self.polls.init()`.
 
 ## [0.2.0] - 2026-04-25
 

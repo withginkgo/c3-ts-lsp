@@ -500,6 +500,59 @@ test('ProjectIndex resolves self members and type methods', () => {
   assert.equal(method.selected?.signature, 'void EventLoop.init(&self)');
 });
 
+test('ProjectIndex resolves methods through generic field receiver types', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'struct NativeSocket {}',
+    'struct Handlers {}',
+    'struct Poll {',
+    '    int fd;',
+    '}',
+    'struct HashMap {}',
+    'struct List {}',
+    'struct EventLoop {',
+    '    HashMap{NativeSocket, Handlers} handlers;',
+    '    List{Poll} polls;',
+    '}',
+    'fn void HashMap.init(&self) {}',
+    'fn void List.init(&self) {}',
+    'fn void use(EventLoop loop) {',
+    '    loop.handlers.init();',
+    '    loop.polls.init();',
+    '    loop.polls[0].fd;',
+    '}',
+    '',
+  ].join('\n');
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+
+  index.upsert(parseSource(uri, source));
+
+  const handlersInit = index.resolveSymbol(
+    uri,
+    'init',
+    doc.positionAt(source.indexOf('init();', source.indexOf('handlers'))),
+  );
+  const pollsInit = index.resolveSymbol(
+    uri,
+    'init',
+    doc.positionAt(source.indexOf('init();', source.indexOf('polls.init'))),
+  );
+  const pollField = index.resolveSymbol(
+    uri,
+    'fd',
+    doc.positionAt(source.lastIndexOf('fd;')),
+  );
+
+  assert.equal(handlersInit.reason, 'resolved');
+  assert.equal(handlersInit.selected?.signature, 'void HashMap.init(&self)');
+  assert.equal(pollsInit.reason, 'resolved');
+  assert.equal(pollsInit.selected?.signature, 'void List.init(&self)');
+  assert.equal(pollField.reason, 'resolved');
+  assert.equal(pollField.selected?.signature, 'int fd;');
+});
+
 test('ProjectIndex selects basic overloads by argument type', () => {
   const index = new ProjectIndex();
   const uri = 'file:///workspace/app.c3';

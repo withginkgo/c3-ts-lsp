@@ -177,6 +177,39 @@ test('semanticDiagnostics accepts self members inside type methods', () => {
   assert.deepEqual(semanticDiagnostics(index, parsed), []);
 });
 
+test('semanticDiagnostics accepts generic receiver methods on self fields', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'struct NativeSocket {}',
+      'struct Handlers {}',
+      'struct Poll {}',
+      'struct HashMap {}',
+      'struct List {}',
+      'struct EventLoop {',
+      '    HashMap{NativeSocket, Handlers} handlers;',
+      '    List{Poll} polls;',
+      '    bool running;',
+      '}',
+      'fn void HashMap.init(&self) {}',
+      'fn void List.init(&self) {}',
+      'fn void EventLoop.init(&self) {',
+      '    self.handlers.init();',
+      '    self.polls.init();',
+      '    self.running = true;',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(semanticDiagnostics(index, parsed), []);
+});
+
 test('semanticDiagnostics reports ambiguous expression symbols', () => {
   const index = new ProjectIndex();
   const appUri = 'file:///workspace/app.c3';
