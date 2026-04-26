@@ -17,13 +17,24 @@ import {
 import { TextDocument } from 'vscode-languageserver-textdocument';
 
 import { semanticDiagnostics } from './analysis/diagnostics.js';
+import { codeActions } from './lsp/code-actions.js';
 import { completionItems } from './lsp/completions.js';
 import { wordAtPosition } from './lsp/document-refs.js';
 import { documentSymbols } from './lsp/document-symbols.js';
 import { hoverFromResolveResult } from './lsp/hover.js';
+import { inlayHints } from './lsp/inlay-hints.js';
+import { prepareRename, renameSymbol } from './lsp/rename.js';
+import { semanticTokenLegend, semanticTokens } from './lsp/semantic-tokens.js';
+import { signatureHelp } from './lsp/signature-help.js';
+import { workspaceSymbols } from './lsp/workspace-symbols.js';
 import { parseSource } from './parser/c3-parser.js';
 import { ProjectIndex } from './project/project-index.js';
 import type { C3Symbol, SourceKind } from './shared/types.js';
+import {
+  formatDocument,
+  resolveFormatterCommand,
+  type FormatterCommand,
+} from './toolchain/formatter.js';
 import { scanWorkspace } from './workspace/scan.js';
 import { watchWorkspace, type WorkspaceWatcher } from './workspace/watch.js';
 
@@ -47,10 +58,12 @@ const projectIndex = new ProjectIndex();
 let workspaceRoot: string | null = null;
 let workspaceWatcher: WorkspaceWatcher | null = null;
 let stdlibRoots: string[] = [];
+let formatterCommand: FormatterCommand | null = null;
 
 connection.onInitialize((params: InitializeParams): InitializeResult => {
   workspaceRoot = resolveWorkspaceRoot(params);
   stdlibRoots = resolveStdlibRoots(params, workspaceRoot);
+  formatterCommand = resolveFormatterCommand(params.initializationOptions);
 
   return {
     capabilities: {
@@ -59,6 +72,20 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
       definitionProvider: true,
       referencesProvider: true,
       documentSymbolProvider: true,
+      workspaceSymbolProvider: true,
+      signatureHelpProvider: {
+        triggerCharacters: ['(', ','],
+      },
+      renameProvider: {
+        prepareProvider: true,
+      },
+      codeActionProvider: true,
+      semanticTokensProvider: {
+        legend: semanticTokenLegend,
+        full: true,
+      },
+      inlayHintProvider: true,
+      documentFormattingProvider: formatterCommand !== null,
       completionProvider: {
         triggerCharacters: [':', '.'],
       },
@@ -151,6 +178,10 @@ connection.onDocumentSymbol((params) => {
   return documentSymbols(parsed);
 });
 
+connection.onWorkspaceSymbol((params) => {
+  return workspaceSymbols(projectIndex, params);
+});
+
 connection.onHover((params): Hover | null => {
   const doc = documents.get(params.textDocument.uri);
   if (!doc) return null;
@@ -206,6 +237,57 @@ connection.onReferences((params): Location[] => {
   if (!result.selected) return [];
 
   return projectIndex.referencesTo(result.selected);
+});
+
+connection.onSignatureHelp((params) => {
+  const doc = documents.get(params.textDocument.uri);
+  const current = projectIndex.getParsed(params.textDocument.uri);
+
+  return signatureHelp(projectIndex, doc, current, params.position);
+});
+
+connection.onRenameRequest((params) => {
+  const doc = documents.get(params.textDocument.uri);
+  const current = projectIndex.getParsed(params.textDocument.uri);
+
+  return renameSymbol(
+    projectIndex,
+    doc,
+    current,
+    params.position,
+    params.newName,
+  );
+});
+
+connection.onPrepareRename((params) => {
+  const doc = documents.get(params.textDocument.uri);
+  const current = projectIndex.getParsed(params.textDocument.uri);
+
+  return prepareRename(projectIndex, doc, current, params.position);
+});
+
+connection.onCodeAction((params) => {
+  const current = projectIndex.getParsed(params.textDocument.uri);
+
+  return codeActions(projectIndex, current, params);
+});
+
+connection.languages.semanticTokens.on((params) => {
+  const current = projectIndex.getParsed(params.textDocument.uri);
+
+  return current ? semanticTokens(current) : { data: [] };
+});
+
+connection.languages.inlayHint.on((params) => {
+  const current = projectIndex.getParsed(params.textDocument.uri);
+
+  return inlayHints(projectIndex, current, params.range);
+});
+
+connection.onDocumentFormatting((params) => {
+  const doc = documents.get(params.textDocument.uri);
+
+  return doc ? formatDocument(doc, formatterCommand) : null;
 });
 
 connection.onCompletion((params) => {

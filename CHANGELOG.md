@@ -30,6 +30,13 @@ All notable project changes are recorded here.
 - Added an LSP references provider backed by syntax-tree references and symbol
   resolution.
 - Added type usage references for type declarations.
+- Added workspace symbols for indexed project declarations and nested members.
+- Added signature help for function and macro calls.
+- Added rename support with workspace edits for non-stdlib symbols.
+- Added code actions for missing imports and unresolved import cleanup.
+- Added semantic tokens for declaration-oriented highlighting.
+- Added inlay type hints for simple inferred `var` declarations.
+- Added optional document formatting through a configured external formatter.
 
 ### Changed
 
@@ -46,6 +53,13 @@ All notable project changes are recorded here.
   members from unrelated top-level symbols.
 - Made member completions use the receiver expression before the cursor, so
   existing member text after the cursor does not change the suggested members.
+- Made qualified references such as `net::connect` track the terminal symbol
+  range so rename edits preserve the module prefix.
+
+### Fixed
+
+- Recovered top-level callable symbols from parser-error regions so newer C3
+  standard-library macros such as `io::printn` remain resolvable.
 
 ## [0.2.0] - 2026-04-25
 

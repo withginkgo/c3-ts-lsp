@@ -3,7 +3,8 @@
 This project is a Node-based language server prototype for C3. It uses
 `tree-sitter-c3` to parse C3 source files and `vscode-languageserver` to expose
 document symbols, hover, definition, and completion support over LSP.
-It also exposes basic diagnostics and references.
+It also exposes diagnostics, references, rename, signature help, workspace
+symbols, code actions, semantic tokens, and inlay hints.
 
 ## Features
 
@@ -26,6 +27,13 @@ It also exposes basic diagnostics and references.
   imports, unresolved symbols, and ambiguous symbols.
 - References for declarations, type usages, scoped locals, and resolved member
   accesses.
+- Workspace symbols for project declarations and nested members.
+- Signature help for function and macro calls.
+- Rename with workspace edits across declarations and references.
+- Code actions for missing imports and unresolved import cleanup.
+- Semantic tokens for declaration highlighting.
+- Inlay type hints for simple inferred `var` declarations.
+- Optional document formatting through a configured external formatter command.
 
 ## Project Structure
 
@@ -35,8 +43,14 @@ src/lsp/completions.ts        Completion item generation
 src/lsp/document-symbols.ts   DocumentSymbol conversion
 src/lsp/document-refs.ts      Identifier/reference extraction from documents
 src/lsp/hover.ts              Hover formatting
+src/lsp/signature-help.ts     Function and macro signature help
+src/lsp/rename.ts             Rename workspace edits
+src/lsp/code-actions.ts       Quick fixes
+src/lsp/semantic-tokens.ts    Semantic token generation
+src/lsp/inlay-hints.ts        Inlay hint generation
 src/parser/c3-parser.ts       Tree-sitter parsing and symbol extraction
 src/project/project-index.ts  Module index and symbol resolution
+src/toolchain/formatter.ts    Optional external formatter integration
 src/workspace/scan.ts         Workspace file discovery and indexing
 src/workspace/watch.ts        Workspace file watching and index updates
 src/analysis/diagnostics.ts   Semantic diagnostic generation

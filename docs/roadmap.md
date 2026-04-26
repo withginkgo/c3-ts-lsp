@@ -30,6 +30,13 @@ The server currently provides a working prototype:
 - Basic overload narrowing by call arity and literal argument type.
 - Member completions while editing incomplete member access such as `res.`.
 - Type usage references for type declarations.
+- Workspace symbols for project declarations and nested members.
+- Signature help for function and macro calls.
+- Rename with workspace edits across declarations and references.
+- Code actions for missing imports and unresolved import cleanup.
+- Semantic tokens for declaration highlighting.
+- Inlay type hints for simple inferred `var` declarations.
+- Optional document formatting through a configured external formatter command.
 - Semantic diagnostics for unresolved imports, unresolved module aliases,
   unresolved expression symbols, unresolved members, and ambiguous expression
   symbols.
@@ -41,9 +48,10 @@ The server currently provides a working prototype:
   completion behavior.
 
 The implementation is still intentionally lightweight. It has project/module
-resolution, basic scoped local lookup, simple member type analysis, and basic
-overload narrowing, but it does not yet model full C3 type relationships,
-implicit conversions, rename, or editor packaging.
+resolution, basic scoped local lookup, simple member type analysis, basic
+overload narrowing, and the core daily editing LSP surface. It does not yet
+model full C3 type relationships, implicit conversions, broad compiler-backed
+analysis, or editor packaging.
 
 ## Target Architecture
 
@@ -167,20 +175,27 @@ Exit criteria:
 
 Goal: cover the features expected from a daily-use language server.
 
-- Workspace symbols and references.
-- Signature help for function and macro calls.
-- Rename with workspace edits.
-- Code actions for missing imports and simple quick fixes.
-- Semantic tokens for syntax highlighting support.
+- Workspace symbols and references. Done for indexed workspace declarations,
+  nested members, and resolved references.
+- Signature help for function and macro calls. Done for normal and imported
+  call expressions.
+- Rename with workspace edits. Done for non-stdlib symbols with resolved
+  references.
+- Code actions for missing imports and simple quick fixes. Done for missing
+  import insertion and unresolved import removal.
+- Semantic tokens for syntax highlighting support. Done for declarations and
+  local symbols.
 - Inlay hints for inferred or hard-to-see types if C3 patterns benefit from
   them.
 - Formatting through an external formatter if the C3 toolchain provides one.
+  Supported through a configured formatter command; no formatter is bundled by
+  the detected `c3c` toolchain.
 
 Exit criteria:
 
 - The server supports navigation, completion, diagnostics, references, rename,
-  and signature help across a normal workspace.
-- Feature tests cover both single-file and multi-file projects.
+  and signature help across a normal workspace. Done.
+- Feature tests cover both single-file and multi-file projects. Done.
 
 ### Phase 6: Editor Packaging And Release
 

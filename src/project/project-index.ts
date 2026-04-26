@@ -26,6 +26,24 @@ export class ProjectIndex {
     return [...this.parsedByUri.values()];
   }
 
+  workspaceSymbols(query = ''): C3Symbol[] {
+    const normalizedQuery = query.trim().toLowerCase();
+
+    return this.allParsed()
+      .filter((parsed) => parsed.sourceKind === 'workspace')
+      .flatMap((parsed) => flattenSymbols(parsed.symbols))
+      .filter((symbol) =>
+        normalizedQuery
+          ? [
+              symbol.name,
+              symbol.moduleName,
+              symbol.signature,
+            ].some((value) => value.toLowerCase().includes(normalizedQuery))
+          : true,
+      )
+      .sort(compareSymbols);
+  }
+
   getModule(name: string): ModuleIndex | undefined {
     return this.modulesByName.get(name);
   }
@@ -135,6 +153,42 @@ export class ProjectIndex {
     if (!current) return [];
 
     return this.membersForTypeName(current, typeName, position);
+  }
+
+  typeNameForExpression(
+    currentUri: string,
+    expressionText: string,
+    position: Position,
+  ): string | undefined {
+    const current = this.parsedByUri.get(currentUri);
+    if (!current) return undefined;
+
+    return this.expressionTypeNameFromText(current, expressionText, position);
+  }
+
+  importCandidatesForSymbol(
+    current: ParsedDocument,
+    ref: string,
+  ): Array<{ moduleName: string; symbol: C3Symbol }> {
+    const currentModule = this.modulesByName.get(current.moduleName);
+    const imported = new Set(currentModule?.imports ?? []);
+    const candidates: Array<{ moduleName: string; symbol: C3Symbol }> = [];
+
+    for (const mod of this.modulesByName.values()) {
+      if (mod.name === current.moduleName || imported.has(mod.name)) continue;
+
+      const visible = (mod.symbols.get(ref) ?? []).find((symbol) =>
+        isVisibleFrom(symbol, current.moduleName),
+      );
+
+      if (visible) {
+        candidates.push({ moduleName: mod.name, symbol: visible });
+      }
+    }
+
+    return candidates.sort((a, b) =>
+      a.moduleName.localeCompare(b.moduleName),
+    );
   }
 
   findSymbol(currentUri: string, ref: string): C3Symbol | undefined {
@@ -755,7 +809,7 @@ export class ProjectIndex {
     target: C3Symbol,
     locations: Location[],
   ): void {
-    if (ref.text !== target.name) return;
+    if (referenceTerminalName(ref.text) !== target.name) return;
 
     const resolved = this.resolveSymbol(
       parsed.uri,
@@ -764,7 +818,9 @@ export class ProjectIndex {
     ).selected;
 
     if (resolved && sameSymbol(resolved, target)) {
-      locations.push(Location.create(parsed.uri, rangeFromNode(ref)));
+      locations.push(
+        Location.create(parsed.uri, referenceNameRange(ref, target.name)),
+      );
     }
   }
 
@@ -1083,6 +1139,21 @@ function compareSymbols(a: C3Symbol, b: C3Symbol): number {
 
 function symbolLocation(symbol: C3Symbol): Location {
   return Location.create(symbol.uri, symbol.selectionRange);
+}
+
+function referenceTerminalName(ref: string): string {
+  return ref.split('::').at(-1) ?? ref;
+}
+
+function referenceNameRange(ref: SyntaxNode, name: string): Range {
+  const offset = Math.max(0, ref.text.lastIndexOf(name));
+
+  return Range.create(
+    ref.startPosition.row,
+    ref.startPosition.column + offset,
+    ref.startPosition.row,
+    ref.startPosition.column + offset + name.length,
+  );
 }
 
 function sameSymbol(a: C3Symbol, b: C3Symbol): boolean {
