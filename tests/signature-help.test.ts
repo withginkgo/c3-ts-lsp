@@ -77,3 +77,37 @@ test('signatureHelp resolves imported macro calls across files', () => {
     'macro void debug(String message, int count)',
   );
 });
+
+test('signatureHelp resolves method-style calls and skips receiver parameters', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'struct EventLoop {}',
+    'fn void EventLoop.init(&self, int count) {}',
+    'fn void use(EventLoop loop) {',
+    '    loop.init(1);',
+    '}',
+    '',
+  ].join('\n');
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+  const parsed = parseSource(uri, source);
+
+  index.upsert(parsed);
+
+  const help = signatureHelp(
+    index,
+    doc,
+    parsed,
+    doc.positionAt(source.indexOf('1);')),
+  );
+
+  assert.equal(help?.activeParameter, 0);
+  assert.deepEqual(
+    help?.signatures.map((signature) => [
+      signature.label,
+      signature.parameters?.map((parameter) => parameter.label),
+    ]),
+    [['void EventLoop.init(&self, int count)', ['int count']]],
+  );
+});

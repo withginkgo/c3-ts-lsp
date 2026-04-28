@@ -14,6 +14,7 @@ type WorkspaceScanReporter = {
 type WorkspaceScanOptions = {
   rebuild?: boolean;
   sourceKind?: SourceKind;
+  files?: string[];
 };
 
 const c3Extensions = new Set(['.c3', '.c3i', '.c3t']);
@@ -31,7 +32,9 @@ export function scanWorkspace(
   reporter: WorkspaceScanReporter = {},
   options: WorkspaceScanOptions = {},
 ): number {
-  const files = collectC3Files(root);
+  const files = options.files
+    ? [...new Set(options.files)].sort((a, b) => a.localeCompare(b))
+    : collectC3Files(root);
   const sourceKind = options.sourceKind ?? 'workspace';
 
   reporter.log?.(`found ${files.length} ${sourceKind} C3 files`);

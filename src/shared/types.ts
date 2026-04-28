@@ -47,7 +47,7 @@ export type ModuleIndex = {
   moduleAliases: Map<string, string>;
 };
 
-export type SourceKind = 'workspace' | 'stdlib';
+export type SourceKind = 'workspace' | 'stdlib' | 'dependency';
 
 export type ParsedDocument = {
   uri: string;

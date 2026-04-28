@@ -38,7 +38,11 @@ export function parseSource(
   const symbols = tree.rootNode.hasError
     ? mergeRecoveredSymbols(
         parsedSymbols,
-        recoverTopLevelCallableSymbols(doc, source, moduleName),
+        [
+          ...recoverTopLevelAggregateSymbols(doc, source, moduleName),
+          ...recoverTopLevelTypeAliasSymbols(doc, source, moduleName),
+          ...recoverTopLevelCallableSymbols(doc, source, moduleName),
+        ],
       )
     : parsedSymbols;
   const scopedSymbols = extractScopedSymbols(doc, tree.rootNode, moduleName);
@@ -181,12 +185,21 @@ function scopedSymbolsForCallable(
   moduleName: string,
 ): C3Symbol[] {
   const body = node.childForFieldName('body');
-  const scopeRange = rangeFromNode(body ?? node);
+  const recoveredBody =
+    !body && node.nextNamedSibling?.type === 'ERROR'
+      ? node.nextNamedSibling
+      : undefined;
+  const scopeRange = rangeFromNode(body ?? recoveredBody ?? node);
   const receiverType = receiverTypeForCallable(node);
+  const localScope = body ?? recoveredBody;
 
   return [
     ...parameterSymbols(doc, node, moduleName, scopeRange, receiverType),
-    ...(body ? localDeclarationSymbols(doc, body, moduleName) : []),
+    ...(localScope
+      ? localDeclarationSymbols(doc, localScope, moduleName, {
+          inMacro: node.type === 'macro_declaration',
+        })
+      : []),
   ];
 }
 
@@ -371,6 +384,9 @@ function simpleDeclarationSymbol(
   return createSymbol(doc, node, nameNode, moduleName, kind, {
     children,
     signature: declarationSignature(node),
+    returnType:
+      node.childForFieldName('type')?.text ??
+      directChildOfType(node, 'type')?.text,
   });
 }
 
@@ -510,6 +526,7 @@ function enumChildSymbols(
   moduleName: string,
 ): C3Symbol[] {
   const symbols: C3Symbol[] = [];
+  const ownerTypeName = extractNameNode(node)?.text;
 
   for (const param of descendantsOfType(node, 'enum_param')) {
     const nameNode = param.childForFieldName('name');
@@ -533,6 +550,7 @@ function enumChildSymbols(
     symbols.push(
       createSymbol(doc, constant, nameNode, moduleName, SymbolKind.Constant, {
         signature: declarationSignature(constant),
+        returnType: ownerTypeName,
       }),
     );
   }
@@ -628,6 +646,7 @@ function localDeclarationSymbols(
   doc: TextDocument,
   scopeRoot: SyntaxNode,
   moduleName: string,
+  options: { inMacro?: boolean } = {},
 ): C3Symbol[] {
   const symbols: C3Symbol[] = [];
 
@@ -664,7 +683,324 @@ function localDeclarationSymbols(
     }
   }
 
+  for (const declaration of descendantsOfType(scopeRoot, 'var_declaration')) {
+    const parent = declaration.parent;
+
+    if (parent?.type !== 'var_stmt') continue;
+    if (!varDeclarationAllowed(declaration, options)) continue;
+
+    const nameNode = declaration.childForFieldName('name');
+    if (!nameNode) continue;
+
+    const scopeNode = nearestAncestorOfTypes(declaration, [
+      'compound_stmt',
+      'macro_func_body',
+      'lambda_body',
+      'ct_stmt_body',
+    ]);
+    const scopeRange = rangeFromNode(scopeNode ?? scopeRoot);
+
+    symbols.push(
+      createSymbol(doc, parent, nameNode, moduleName, SymbolKind.Variable, {
+        signature: declarationSignature(parent),
+        attributes: attributesFor(declaration),
+        scopeRange,
+      }),
+    );
+  }
+
+  symbols.push(...foreachVariableSymbols(doc, scopeRoot, moduleName));
+  symbols.push(...forInitializerSymbols(doc, scopeRoot, moduleName, options));
+
   return symbols;
+}
+
+function varDeclarationAllowed(
+  declaration: SyntaxNode,
+  options: { inMacro?: boolean },
+): boolean {
+  return (
+    !!options.inMacro ||
+    !!nearestAncestorOfTypes(declaration, ['macro_declaration']) ||
+    hasAttribute(declaration, '@safeinfer') ||
+    varDeclarationInitializesLambda(declaration)
+  );
+}
+
+function varDeclarationInitializesLambda(declaration: SyntaxNode): boolean {
+  const right = declaration.childForFieldName('right');
+
+  return !!right && right.type.startsWith('lambda_');
+}
+
+function forInitializerSymbols(
+  doc: TextDocument,
+  scopeRoot: SyntaxNode,
+  moduleName: string,
+  options: { inMacro?: boolean },
+): C3Symbol[] {
+  const symbols: C3Symbol[] = [];
+
+  for (const forCond of descendantsOfType(scopeRoot, 'for_cond')) {
+    const initializer = forCond.childForFieldName('initializer');
+    if (!initializer) continue;
+
+    const scopeNode = nearestAncestorOfTypes(forCond, ['for_stmt']);
+    const scopeRange = rangeFromNode(scopeNode ?? forCond);
+
+    for (const declaration of directChildrenOfType(initializer, 'declaration')) {
+      for (const nameNode of declarationNameNodes(declaration)) {
+        symbols.push(
+          createSymbol(
+            doc,
+            declaration,
+            nameNode,
+            moduleName,
+            SymbolKind.Variable,
+            {
+              signature: declarationSignature(declaration),
+              returnType: declaration.childForFieldName('type')?.text,
+              scopeRange,
+            },
+          ),
+        );
+      }
+    }
+
+    for (const declaration of directChildrenOfType(
+      initializer,
+      'var_declaration',
+    )) {
+      if (!varDeclarationAllowed(declaration, options)) continue;
+
+      const nameNode = declaration.childForFieldName('name');
+      if (!nameNode) continue;
+
+      symbols.push(
+        createSymbol(
+          doc,
+          declaration,
+          nameNode,
+          moduleName,
+          SymbolKind.Variable,
+          {
+            signature: declarationSignature(declaration),
+            attributes: attributesFor(declaration),
+            scopeRange,
+          },
+        ),
+      );
+    }
+  }
+
+  return symbols;
+}
+
+function hasAttribute(node: SyntaxNode, name: string): boolean {
+  return attributesFor(node).some((attribute) => attribute.split('(')[0] === name);
+}
+
+function foreachVariableSymbols(
+  doc: TextDocument,
+  scopeRoot: SyntaxNode,
+  moduleName: string,
+): C3Symbol[] {
+  const symbols: C3Symbol[] = [];
+
+  for (const foreachCond of descendantsOfType(scopeRoot, 'foreach_cond')) {
+    const foreachStmt = foreachCond.parent;
+    const body = foreachStmt?.childForFieldName('body');
+    const scopeRange = rangeFromNode(body ?? foreachStmt ?? foreachCond);
+
+    for (const foreachVar of directChildrenOfType(foreachCond, 'foreach_var')) {
+      const nameNode = directChildOfType(foreachVar, 'ident');
+      if (!nameNode) continue;
+
+      symbols.push(
+        createSymbol(
+          doc,
+          foreachVar,
+          nameNode,
+          moduleName,
+          SymbolKind.Variable,
+          {
+            signature: compactText(foreachVar.text),
+            returnType: directChildOfType(foreachVar, 'type')?.text,
+            scopeRange,
+          },
+        ),
+      );
+    }
+  }
+
+  return symbols;
+}
+
+function recoverTopLevelAggregateSymbols(
+  doc: TextDocument,
+  source: string,
+  moduleName: string,
+): C3Symbol[] {
+  const symbols: C3Symbol[] = [];
+  const aggregateStart = /(^|\n)(?:struct|union|enum|constdef)\s+/g;
+
+  let match: RegExpExecArray | null;
+  while ((match = aggregateStart.exec(source))) {
+    const startIndex = match.index + match[1].length;
+
+    if (braceDepthBefore(source, startIndex) !== 0) continue;
+
+    const symbol = recoverAggregateSymbol(doc, source, moduleName, startIndex);
+    if (symbol) symbols.push(symbol);
+  }
+
+  return symbols;
+}
+
+function recoverAggregateSymbol(
+  doc: TextDocument,
+  source: string,
+  moduleName: string,
+  startIndex: number,
+): C3Symbol | null {
+  const headerEnd = topLevelDeclarationHeaderEndIndex(source, startIndex);
+  const header = source.slice(startIndex, headerEnd).trim();
+  const match = header.match(
+    /^(?<kind>struct|union|enum|constdef)\s+(?<name>[A-Za-z_$@][A-Za-z0-9_$@]*)/,
+  );
+  if (!match?.groups) return null;
+
+  const name = match.groups.name;
+  const nameStart = source.indexOf(name, startIndex);
+  const bodyRange = bracedBodyRange(source, headerEnd);
+  const kind =
+    match.groups.kind === 'enum'
+      ? SymbolKind.Enum
+      : match.groups.kind === 'constdef'
+        ? SymbolKind.Constant
+        : SymbolKind.Struct;
+  const children =
+    bodyRange && (match.groups.kind === 'enum' || match.groups.kind === 'constdef')
+      ? recoverEnumLikeChildren(
+          doc,
+          source,
+          moduleName,
+          name,
+          bodyRange.start + 1,
+          bodyRange.end - 1,
+        )
+      : [];
+
+  return {
+    name,
+    moduleName,
+    kind,
+    uri: doc.uri,
+    range: rangeFromOffsets(doc, startIndex, bodyRange?.end ?? headerEnd),
+    selectionRange: rangeFromOffsets(doc, nameStart, nameStart + name.length),
+    bodyRange: bodyRange
+      ? rangeFromOffsets(doc, bodyRange.start, bodyRange.end)
+      : undefined,
+    signature: compactText(header),
+    documentation: undefined,
+    attributes: attributesFromText(header),
+    parameters: [],
+    children,
+  };
+}
+
+function recoverEnumLikeChildren(
+  doc: TextDocument,
+  source: string,
+  moduleName: string,
+  ownerTypeName: string,
+  bodyStart: number,
+  bodyEnd: number,
+): C3Symbol[] {
+  const body = source.slice(bodyStart, bodyEnd);
+  const constants: C3Symbol[] = [];
+  const constant = /(^|[,\n])\s*(?<name>[A-Z_][A-Z0-9_]*)\b/g;
+
+  let match: RegExpExecArray | null;
+  while ((match = constant.exec(body))) {
+    if (!match.groups) continue;
+
+    const name = match.groups.name;
+    const localNameStart = match.index + match[0].lastIndexOf(name);
+    const nameStart = bodyStart + localNameStart;
+    const entryEnd =
+      bodyStart + nextTopLevelEnumSeparator(body, localNameStart + name.length);
+
+    constants.push({
+      name,
+      moduleName,
+      kind: SymbolKind.Constant,
+      uri: doc.uri,
+      range: rangeFromOffsets(doc, nameStart, entryEnd),
+      selectionRange: rangeFromOffsets(doc, nameStart, nameStart + name.length),
+      signature: compactText(source.slice(nameStart, entryEnd)),
+      documentation: undefined,
+      attributes: attributesFromText(source.slice(nameStart, entryEnd)),
+      returnType: ownerTypeName,
+      parameters: [],
+      children: [],
+    });
+  }
+
+  return constants;
+}
+
+function recoverTopLevelTypeAliasSymbols(
+  doc: TextDocument,
+  source: string,
+  moduleName: string,
+): C3Symbol[] {
+  const symbols: C3Symbol[] = [];
+  const aliasStart = /(^|\n)(?:typedef|alias)\s+/g;
+
+  let match: RegExpExecArray | null;
+  while ((match = aliasStart.exec(source))) {
+    const startIndex = match.index + match[1].length;
+
+    if (braceDepthBefore(source, startIndex) !== 0) continue;
+
+    const symbol = recoverTypeAliasSymbol(doc, source, moduleName, startIndex);
+    if (symbol) symbols.push(symbol);
+  }
+
+  return symbols;
+}
+
+function recoverTypeAliasSymbol(
+  doc: TextDocument,
+  source: string,
+  moduleName: string,
+  startIndex: number,
+): C3Symbol | null {
+  const endIndex = topLevelDeclarationEndIndex(source, startIndex);
+  const declaration = source.slice(startIndex, endIndex).trim();
+  const match = declaration.match(
+    /^(?<kind>typedef|alias)\s+(?<name>[A-Za-z_$@][A-Za-z0-9_$@]*)\s*=\s*(?:inline\s+)?(?<target>[^;]+?)\s*;?$/,
+  );
+  if (!match?.groups || match.groups.target.startsWith('module ')) return null;
+
+  const name = match.groups.name;
+  const nameStart = source.indexOf(name, startIndex);
+
+  return {
+    name,
+    moduleName,
+    kind: SymbolKind.TypeParameter,
+    uri: doc.uri,
+    range: rangeFromOffsets(doc, startIndex, endIndex),
+    selectionRange: rangeFromOffsets(doc, nameStart, nameStart + name.length),
+    signature: compactText(declaration),
+    documentation: undefined,
+    attributes: attributesFromText(declaration),
+    returnType: match.groups.target.trim(),
+    parameters: [],
+    children: [],
+  };
 }
 
 function recoverTopLevelCallableSymbols(
@@ -1103,6 +1439,107 @@ function callableHeaderEndIndex(source: string, startIndex: number): number {
   }
 
   return source.length;
+}
+
+function topLevelDeclarationHeaderEndIndex(
+  source: string,
+  startIndex: number,
+): number {
+  const state: LexState = {};
+  let parenDepth = 0;
+
+  for (let index = startIndex; index < source.length; index++) {
+    const char = source[index];
+
+    if (updateLexState(source, index, state)) continue;
+    if (state.lineComment || state.blockComment || state.stringQuote) continue;
+
+    if (char === '(') {
+      parenDepth++;
+      continue;
+    }
+
+    if (char === ')') {
+      parenDepth = Math.max(0, parenDepth - 1);
+      continue;
+    }
+
+    if (parenDepth === 0 && (char === '{' || char === ';')) return index;
+  }
+
+  return source.length;
+}
+
+function topLevelDeclarationEndIndex(source: string, startIndex: number): number {
+  const state: LexState = {};
+
+  for (let index = startIndex; index < source.length; index++) {
+    const char = source[index];
+
+    if (updateLexState(source, index, state)) continue;
+    if (state.lineComment || state.blockComment || state.stringQuote) continue;
+
+    if (char === ';') return index + 1;
+  }
+
+  return source.length;
+}
+
+function bracedBodyRange(
+  source: string,
+  searchStart: number,
+): { start: number; end: number } | undefined {
+  const state: LexState = {};
+  let bodyStart = -1;
+  let depth = 0;
+
+  for (let index = searchStart; index < source.length; index++) {
+    const char = source[index];
+
+    if (updateLexState(source, index, state)) continue;
+    if (state.lineComment || state.blockComment || state.stringQuote) continue;
+
+    if (char === '{') {
+      if (depth === 0) bodyStart = index;
+      depth++;
+      continue;
+    }
+
+    if (char === '}') {
+      depth--;
+      if (depth === 0 && bodyStart >= 0) {
+        return { start: bodyStart, end: index + 1 };
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function nextTopLevelEnumSeparator(body: string, startIndex: number): number {
+  const state: LexState = {};
+  let depth = 0;
+
+  for (let index = startIndex; index < body.length; index++) {
+    const char = body[index];
+
+    if (updateLexState(body, index, state)) continue;
+    if (state.lineComment || state.blockComment || state.stringQuote) continue;
+
+    if (char === '(' || char === '[' || char === '{') {
+      depth++;
+      continue;
+    }
+
+    if (char === ')' || char === ']' || char === '}') {
+      depth = Math.max(0, depth - 1);
+      continue;
+    }
+
+    if (char === ',' && depth === 0) return index;
+  }
+
+  return body.length;
 }
 
 function parameterListText(

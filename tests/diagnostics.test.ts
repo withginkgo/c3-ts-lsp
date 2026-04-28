@@ -21,6 +21,36 @@ test('semanticDiagnostics reports unresolved imports', () => {
   );
 });
 
+test('semanticDiagnostics reports unresolved imports even when syntax is incomplete', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'import std::net::poll;',
+      'fn void use() {',
+      '    if (p.) {}',
+      '}',
+      '',
+    ].join('\n'),
+  );
+  const net = parseSource(
+    'file:///stdlib/std/net/socket.c3',
+    ['module std::net;', 'fn void poll() {}', ''].join('\n'),
+    { sourceKind: 'stdlib' },
+  );
+
+  index.upsert(parsed, false);
+  index.upsert(net, false);
+  index.rebuild();
+
+  assert.deepEqual(
+    semanticDiagnostics(index, parsed).map((diagnostic) => diagnostic.message),
+    ["Unresolved import 'std::net::poll'"],
+  );
+});
+
 test('semanticDiagnostics accepts relative imports', () => {
   const index = new ProjectIndex();
   const app = parseSource(
@@ -69,6 +99,37 @@ test('semanticDiagnostics reports unresolved expression symbols', () => {
     semanticDiagnostics(index, parsed).map((diagnostic) => diagnostic.message),
     ["Unresolved symbol 'missing'"],
   );
+});
+
+test('semanticDiagnostics accepts implicitly imported std::core symbols', () => {
+  const index = new ProjectIndex();
+  const app = parseSource(
+    'file:///workspace/app.c3',
+    [
+      'module app;',
+      'fn void use() {',
+      '    unreachable("listen failed");',
+      '}',
+      '',
+    ].join('\n'),
+  );
+  const builtin = parseSource(
+    'file:///stdlib/std/core/builtin.c3',
+    [
+      'module std::core::builtin;',
+      'macro void unreachable(String string = "Unreachable statement reached.", ...) @builtin @noreturn',
+      '{',
+      '}',
+      '',
+    ].join('\n'),
+    { sourceKind: 'stdlib' },
+  );
+
+  index.upsert(app, false);
+  index.upsert(builtin, false);
+  index.rebuild();
+
+  assert.deepEqual(semanticDiagnostics(index, app), []);
 });
 
 test('semanticDiagnostics resolves qualified imported macros recovered from stdlib parse errors', () => {
@@ -145,6 +206,88 @@ test('semanticDiagnostics accepts resolved members', () => {
       'fn void use() {',
       '    HttpResponse res;',
       '    res.body;',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(semanticDiagnostics(index, parsed), []);
+});
+
+test('semanticDiagnostics accepts type-qualified enum and constdef constants', () => {
+  const index = new ProjectIndex();
+  const app = parseSource(
+    'file:///workspace/app.c3',
+    [
+      'module poll_demo;',
+      'import std::net;',
+      'fn void use() {',
+      '    net::SocketOption.REUSEADDR;',
+      '    PollSubscribe.READ;',
+      '}',
+      '',
+    ].join('\n'),
+  );
+  const net = parseSource(
+    'file:///stdlib/std/net/socket.c3',
+    [
+      'module std::net;',
+      'enum SocketOption : char (CInt value)',
+      '{',
+      '    REUSEADDR { 1 },',
+      '}',
+      'constdef PollSubscribe : ushort { READ }',
+      '',
+    ].join('\n'),
+    { sourceKind: 'stdlib' },
+  );
+
+  index.upsert(app, false);
+  index.upsert(net, false);
+  index.rebuild();
+
+  assert.deepEqual(semanticDiagnostics(index, app), []);
+});
+
+test('semanticDiagnostics accepts var declarations inferred from initializers', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'struct HttpResponse {',
+      '    String body;',
+      '}',
+      'fn HttpResponse make_response() {}',
+      'fn void use() {',
+      '    var response @safeinfer = make_response();',
+      '    response.body;',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(semanticDiagnostics(index, parsed), []);
+});
+
+test('semanticDiagnostics accepts for initializer declaration references', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'fn void use() {',
+      '    bool[] in_use;',
+      '    for (int i = 0; i < 4; i++) {',
+      '        if (!in_use[i]) {',
+      '        }',
+      '    }',
       '}',
       '',
     ].join('\n'),
@@ -345,7 +488,7 @@ test('semanticDiagnostics reports ambiguous expression symbols', () => {
   );
 });
 
-test('semanticDiagnostics accepts overloads resolved by literal argument types', () => {
+test('semanticDiagnostics reports duplicate callable names as ambiguous', () => {
   const index = new ProjectIndex();
   const uri = 'file:///workspace/app.c3';
   const parsed = parseSource(
@@ -364,5 +507,11 @@ test('semanticDiagnostics accepts overloads resolved by literal argument types',
 
   index.upsert(parsed);
 
-  assert.deepEqual(semanticDiagnostics(index, parsed), []);
+  assert.deepEqual(
+    semanticDiagnostics(index, parsed).map((diagnostic) => diagnostic.message),
+    [
+      "Ambiguous symbol 'add' (2 candidates)",
+      "Ambiguous symbol 'add' (2 candidates)",
+    ],
+  );
 });

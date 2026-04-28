@@ -18,7 +18,6 @@ import {
   nominalTypeName,
   normalizeTypeName,
   terminalTypeName,
-  typeNamesCompatible,
 } from '../shared/type-ref.js';
 
 export class ProjectIndex {
@@ -98,10 +97,7 @@ export class ProjectIndex {
 
     const symbols = [...currentModule.symbols.values()].flat();
 
-    for (const imp of currentModule.imports) {
-      const importedModule = this.resolveImportedModule(current, imp);
-      if (!importedModule) continue;
-
+    for (const importedModule of this.visibleImportedModules(current)) {
       symbols.push(
         ...[...importedModule.symbols.values()]
           .flat()
@@ -174,8 +170,7 @@ export class ProjectIndex {
     current: ParsedDocument,
     ref: string,
   ): Array<{ moduleName: string; symbol: C3Symbol }> {
-    const currentModule = this.modulesByName.get(current.moduleName);
-    const imported = new Set(currentModule?.imports ?? []);
+    const imported = this.importedModuleNameSet(current);
     const candidates: Array<{ moduleName: string; symbol: C3Symbol }> = [];
 
     for (const mod of this.modulesByName.values()) {
@@ -208,15 +203,12 @@ export class ProjectIndex {
 
     if (local) return local;
 
-    if (currentModule) {
-      for (const imp of currentModule.imports) {
-        const importedModule = this.resolveImportedModule(current, imp);
-        const imported = importedModule?.allSymbols
-          .get(ref)
-          ?.find((symbol) => isVisibleFrom(symbol, current.moduleName));
+    for (const importedModule of this.visibleImportedModules(current)) {
+      const imported = importedModule.allSymbols
+        .get(ref)
+        ?.find((symbol) => isVisibleFrom(symbol, current.moduleName));
 
-        if (imported) return imported;
-      }
+      if (imported) return imported;
     }
 
     return undefined;
@@ -241,14 +233,7 @@ export class ProjectIndex {
     }
 
     if (ref.includes('::')) {
-      return resultFromCandidates(
-        this.overloadCandidatesAt(
-          current,
-          ref,
-          position,
-          this.qualifiedSymbolCandidates(current, ref),
-        ),
-      );
+      return resultFromCandidates(this.qualifiedSymbolCandidates(current, ref));
     }
 
     const declared = findDeclaredSymbolAt(current.symbols, ref, position);
@@ -259,9 +244,7 @@ export class ProjectIndex {
 
     const moduleCandidates = this.visibleModuleSymbolCandidates(current, ref);
     if (moduleCandidates.length > 0) {
-      return resultFromCandidates(
-        this.overloadCandidatesAt(current, ref, position, moduleCandidates),
-      );
+      return resultFromCandidates(moduleCandidates);
     }
 
     return resultFromCandidates(
@@ -346,15 +329,12 @@ export class ProjectIndex {
 
     const imported: C3Symbol[] = [];
 
-    if (currentModule) {
-      for (const imp of currentModule.imports) {
-        const importedModule = this.resolveImportedModule(current, imp);
-        imported.push(
-          ...(importedModule?.symbols.get(ref) ?? []).filter((symbol) =>
-            isVisibleFrom(symbol, current.moduleName),
-          ),
-        );
-      }
+    for (const importedModule of this.visibleImportedModules(current)) {
+      imported.push(
+        ...(importedModule.symbols.get(ref) ?? []).filter((symbol) =>
+          isVisibleFrom(symbol, current.moduleName),
+        ),
+      );
     }
 
     return imported;
@@ -364,26 +344,52 @@ export class ProjectIndex {
     current: ParsedDocument,
     prefix: string,
   ): ModuleIndex | undefined {
-    const direct = this.modulesByName.get(prefix);
-    if (direct) return direct;
+    const resolvedName = this.resolveModuleNameFromPrefix(current, prefix);
+    return resolvedName ? this.modulesByName.get(resolvedName) : undefined;
+  }
+
+  moduleChildNamesForPrefix(
+    current: ParsedDocument,
+    prefix: string,
+  ): string[] {
+    const resolvedPrefix =
+      this.resolveModuleNameFromPrefix(current, prefix) ?? prefix;
+    const childPrefix = `${resolvedPrefix}::`;
+    const childNames = new Set<string>();
+
+    for (const moduleName of this.modulesByName.keys()) {
+      if (!moduleName.startsWith(childPrefix)) continue;
+
+      const childName = moduleName.slice(childPrefix.length).split('::')[0];
+      if (childName) childNames.add(childName);
+    }
+
+    return [...childNames].sort((a, b) => a.localeCompare(b));
+  }
+
+  private resolveModuleNameFromPrefix(
+    current: ParsedDocument,
+    prefix: string,
+  ): string | undefined {
+    if (this.modulesByName.has(prefix)) return prefix;
 
     const currentModule = this.modulesByName.get(current.moduleName);
 
     const aliased = currentModule?.moduleAliases.get(prefix);
-    if (aliased) return this.resolveImportedModule(current, aliased);
+    if (aliased) return this.resolveImportedModule(current, aliased)?.name;
 
     if (currentModule) {
       for (const imp of currentModule.imports) {
         const lastSegment = imp.split('::').at(-1);
 
         if (lastSegment === prefix) {
-          return this.resolveImportedModule(current, imp);
+          return this.resolveImportedModule(current, imp)?.name;
         }
       }
     }
 
     const relative = this.modulesByName.get(`${current.moduleName}::${prefix}`);
-    if (relative) return relative;
+    if (relative) return relative.name;
 
     return undefined;
   }
@@ -461,20 +467,17 @@ export class ProjectIndex {
 
     if (local) return [local];
 
-    if (currentModule) {
-      const importedCandidates: C3Symbol[] = [];
+    const importedCandidates: C3Symbol[] = [];
 
-      for (const imp of currentModule.imports) {
-        const importedModule = this.resolveImportedModule(current, imp);
-        const imported = findUnqualifiedNestedUsageSymbol(importedModule, ref);
+    for (const importedModule of this.visibleImportedModules(current)) {
+      const imported = findUnqualifiedNestedUsageSymbol(importedModule, ref);
 
-        if (imported && isVisibleFrom(imported, current.moduleName)) {
-          importedCandidates.push(imported);
-        }
+      if (imported && isVisibleFrom(imported, current.moduleName)) {
+        importedCandidates.push(imported);
       }
-
-      if (importedCandidates.length > 0) return importedCandidates;
     }
+
+    if (importedCandidates.length > 0) return importedCandidates;
 
     return [];
   }
@@ -506,14 +509,25 @@ export class ProjectIndex {
     const literalType = literalTypeName(expression);
     if (literalType) return literalType;
 
+    if (expression.type === 'type') {
+      return expression.text;
+    }
+
     if (expression.type === 'ident_expr') {
+      const expressionPosition = rangeFromNode(expression).start;
       const resolved = this.resolveSymbol(
         current.uri,
         expression.text,
-        rangeFromNode(expression).start,
+        expressionPosition,
       ).selected;
 
-      return resolved?.returnType ?? symbolTypeName(resolved);
+      return (
+        resolved?.returnType ??
+        symbolTypeName(resolved) ??
+        this.foreachVariableTypeName(current, expression.text, expressionPosition) ??
+        this.varDeclarationTypeName(current, expression.text, expressionPosition) ??
+        recoverableLocalTypeName(current, expression.text, expressionPosition)
+      );
     }
 
     if (expression.type === 'call_expr') {
@@ -671,6 +685,8 @@ export class ProjectIndex {
       return (
         resolved?.returnType ??
         symbolTypeName(resolved) ??
+        this.foreachVariableTypeName(current, text, position) ??
+        this.varDeclarationTypeName(current, text, position) ??
         recoverableLocalTypeName(current, text, position)
       );
     }
@@ -678,46 +694,72 @@ export class ProjectIndex {
     return undefined;
   }
 
-  private overloadCandidatesAt(
+  private foreachVariableTypeName(
     current: ParsedDocument,
     ref: string,
     position: Position,
-    candidates: C3Symbol[],
-  ): C3Symbol[] {
-    if (candidates.length <= 1) return candidates;
+  ): string | undefined {
+    if (!/^[A-Za-z_$@][A-Za-z0-9_$@]*$/.test(ref)) return undefined;
 
-    const call = callExpressionAt(current, ref, position);
-    if (!call) return candidates;
-
-    const overloads = candidates.filter(
-      (candidate) =>
-        candidate.kind === SymbolKind.Function ||
-        candidate.kind === SymbolKind.Method,
+    const candidates = foreachVariableCandidatesAt(
+      current.tree.rootNode,
+      ref,
+      position,
     );
 
-    if (overloads.length <= 1) return candidates;
+    for (const candidate of candidates) {
+      const explicitType = directChildOfType(candidate.variable, 'type')?.text;
+      if (explicitType) return explicitType;
 
-    const args = callArgumentNodes(call);
-    const sameArity = overloads.filter(
-      (candidate) => parameterTypes(candidate).length === args.length,
-    );
+      if (candidate.role === 'index') return 'usz';
 
-    if (sameArity.length === 0) return candidates;
-    if (sameArity.length === 1) return sameArity;
+      const collection = candidate.condition.childForFieldName('collection');
+      if (!collection) continue;
 
-    const argTypes = args.map((arg) =>
-      this.expressionTypeName(current, arg, rangeFromNode(arg).start),
-    );
+      const collectionType = this.expressionTypeName(
+        current,
+        collection,
+        rangeFromNode(collection).start,
+      );
+      if (!collectionType) continue;
 
-    if (argTypes.some((argType) => !argType)) return sameArity;
+      const elementType = collectionElementTypeName(collectionType);
+      if (!elementType) continue;
 
-    const typed = sameArity.filter((candidate) =>
-      parameterTypes(candidate).every((paramType, index) =>
-        typeNamesCompatible(argTypes[index], paramType),
-      ),
-    );
+      return foreachVariableByReference(candidate.variable)
+        ? `${normalizeTypeName(elementType)}*`
+        : elementType;
+    }
 
-    return typed.length > 0 ? typed : sameArity;
+    return undefined;
+  }
+
+  private varDeclarationTypeName(
+    current: ParsedDocument,
+    ref: string,
+    position: Position,
+  ): string | undefined {
+    if (!/^[A-Za-z_$@][A-Za-z0-9_$@]*$/.test(ref)) return undefined;
+
+    for (const declaration of varDeclarationCandidatesAt(
+      current.tree.rootNode,
+      ref,
+      position,
+    )) {
+      if (!varDeclarationAllowed(declaration)) continue;
+
+      const right = declaration.childForFieldName('right');
+      if (!right || right.text === ref) continue;
+
+      const typeName = this.expressionTypeName(
+        current,
+        right,
+        rangeFromNode(right).start,
+      );
+      if (typeName) return typeName;
+    }
+
+    return undefined;
   }
 
   private membersForTypeName(
@@ -725,18 +767,64 @@ export class ProjectIndex {
     typeName: string,
     position: Position,
   ): C3Symbol[] {
-    const nominalType = nominalTypeName(typeName);
-    if (!nominalType) return [];
+    const symbols: C3Symbol[] = [];
 
-    const typeSymbol = this.resolveTypeSymbol(
+    for (const expandedTypeName of this.expandTypeAliases(
       current,
-      nominalType,
+      typeName,
       position,
-    );
-    return [
-      ...(typeSymbol?.children ?? []),
-      ...this.methodSymbolsForTypeName(current, typeName, typeSymbol),
-    ];
+    )) {
+      const nominalType = nominalTypeName(expandedTypeName);
+      if (!nominalType) continue;
+
+      const typeSymbol = this.resolveTypeSymbol(
+        current,
+        nominalType,
+        position,
+      );
+
+      symbols.push(
+        ...(typeSymbol?.children ?? []),
+        ...this.methodSymbolsForTypeName(current, expandedTypeName, typeSymbol),
+      );
+    }
+
+    return uniqueSymbols(symbols).sort(compareSymbols);
+  }
+
+  private expandTypeAliases(
+    current: ParsedDocument,
+    typeName: string,
+    position: Position,
+  ): string[] {
+    const expanded: string[] = [];
+    const visited = new Set<string>();
+    let currentType: string | undefined = typeName;
+
+    while (currentType) {
+      const normalized = normalizeTypeName(currentType);
+      if (!normalized || visited.has(normalized)) break;
+
+      visited.add(normalized);
+      expanded.push(currentType);
+      currentType = this.typeAliasTargetName(current, normalized, position);
+    }
+
+    return expanded;
+  }
+
+  private typeAliasTargetName(
+    current: ParsedDocument,
+    typeName: string,
+    position: Position,
+  ): string | undefined {
+    const candidates = typeName.includes('::')
+      ? this.qualifiedSymbolCandidates(current, typeName)
+      : this.visibleModuleSymbolCandidates(current, typeName);
+
+    return resultFromCandidates(
+      candidates.filter((symbol) => symbol.kind === SymbolKind.TypeParameter),
+    ).selected?.returnType;
   }
 
   private methodSymbolsForTypeName(
@@ -774,14 +862,34 @@ export class ProjectIndex {
     const symbols = [...currentModule.symbols.values()].flat();
     const visited = new Set([currentModule.name]);
 
-    this.collectImportedSymbols(
-      currentModule,
-      current.moduleName,
-      symbols,
-      visited,
-    );
+    for (const importedModule of this.visibleImportedModules(current)) {
+      this.collectModuleAndImports(
+        importedModule,
+        current.moduleName,
+        symbols,
+        visited,
+      );
+    }
 
     return symbols;
+  }
+
+  private collectModuleAndImports(
+    mod: ModuleIndex,
+    requesterModuleName: string,
+    symbols: C3Symbol[],
+    visited: Set<string>,
+  ): void {
+    if (visited.has(mod.name)) return;
+
+    visited.add(mod.name);
+    symbols.push(
+      ...[...mod.symbols.values()]
+        .flat()
+        .filter((symbol) => isVisibleFrom(symbol, requesterModuleName)),
+    );
+
+    this.collectImportedSymbols(mod, requesterModuleName, symbols, visited);
   }
 
   private collectImportedSymbols(
@@ -792,22 +900,53 @@ export class ProjectIndex {
   ): void {
     for (const imp of mod.imports) {
       const importedModule = this.resolveImportFromModule(mod.name, imp);
-      if (!importedModule || visited.has(importedModule.name)) continue;
+      if (!importedModule) continue;
 
-      visited.add(importedModule.name);
-      symbols.push(
-        ...[...importedModule.symbols.values()]
-          .flat()
-          .filter((symbol) => isVisibleFrom(symbol, requesterModuleName)),
-      );
-
-      this.collectImportedSymbols(
+      this.collectModuleAndImports(
         importedModule,
         requesterModuleName,
         symbols,
         visited,
       );
     }
+  }
+
+  private visibleImportedModules(current: ParsedDocument): ModuleIndex[] {
+    const currentModule = this.modulesByName.get(current.moduleName);
+    if (!currentModule) return [];
+
+    const modules: ModuleIndex[] = [];
+    const seen = new Set<string>();
+
+    for (const imp of currentModule.imports) {
+      const importedModule = this.resolveImportedModule(current, imp);
+      if (!importedModule || seen.has(importedModule.name)) continue;
+
+      seen.add(importedModule.name);
+      modules.push(importedModule);
+    }
+
+    for (const implicitModule of this.implicitCoreModules()) {
+      if (seen.has(implicitModule.name)) continue;
+
+      seen.add(implicitModule.name);
+      modules.push(implicitModule);
+    }
+
+    return modules;
+  }
+
+  private implicitCoreModules(): ModuleIndex[] {
+    return [...this.modulesByName.values()]
+      .filter((mod) => isImplicitCoreModuleName(mod.name))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  private importedModuleNameSet(current: ParsedDocument): Set<string> {
+    return new Set([
+      current.moduleName,
+      ...this.visibleImportedModules(current).map((mod) => mod.name),
+    ]);
   }
 
   private resolveImportFromModule(
@@ -1043,6 +1182,10 @@ function isVisibleFrom(symbol: C3Symbol, moduleName: string): boolean {
   );
 }
 
+function isImplicitCoreModuleName(moduleName: string): boolean {
+  return moduleName === 'std::core' || moduleName.startsWith('std::core::');
+}
+
 function positionInRange(position: Position, range: Range): boolean {
   return (
     comparePositions(range.start, position) <= 0 &&
@@ -1103,43 +1246,6 @@ const expressionNodeTypes = new Set([
   'cast_expr',
 ]);
 
-function callExpressionAt(
-  current: ParsedDocument,
-  ref: string,
-  position: Position,
-): SyntaxNode | undefined {
-  const node = current.tree.rootNode.descendantForPosition({
-    row: position.line,
-    column: position.character,
-  });
-  const identExpr = ancestorOfType(node, 'ident_expr');
-  if (!identExpr || identExpr.text !== ref) return undefined;
-
-  const call = ancestorOfType(identExpr, 'call_expr');
-  if (!call) return undefined;
-
-  const functionNode = call.childForFieldName('function');
-  if (
-    !functionNode ||
-    functionNode.startIndex !== identExpr.startIndex ||
-    functionNode.endIndex !== identExpr.endIndex
-  ) {
-    return undefined;
-  }
-
-  return call;
-}
-
-function callArgumentNodes(call: SyntaxNode): SyntaxNode[] {
-  const args = call.childForFieldName('arguments');
-  if (!args) return [];
-
-  return args.namedChildren.flatMap((arg) => {
-    if (arg.type !== 'call_arg') return [arg];
-    return arg.namedChildren.length > 0 ? [arg.namedChildren.at(-1)!] : [];
-  });
-}
-
 function parameterTypes(symbol: C3Symbol): string[] {
   const childTypes = symbol.children
     .map((child) => child.returnType)
@@ -1199,6 +1305,29 @@ function uniqueMethodSymbols(symbols: C3Symbol[]): C3Symbol[] {
 
   for (const symbol of symbols) {
     const key = methodShapeKey(symbol);
+    if (seen.has(key)) continue;
+
+    seen.add(key);
+    unique.push(symbol);
+  }
+
+  return unique;
+}
+
+function uniqueSymbols(symbols: C3Symbol[]): C3Symbol[] {
+  const seen = new Set<string>();
+  const unique: C3Symbol[] = [];
+
+  for (const symbol of symbols) {
+    const key = [
+      symbol.uri,
+      symbol.selectionRange.start.line,
+      symbol.selectionRange.start.character,
+      symbol.selectionRange.end.line,
+      symbol.selectionRange.end.character,
+      methodShapeKey(symbol),
+    ].join(':');
+
     if (seen.has(key)) continue;
 
     seen.add(key);
@@ -1284,6 +1413,174 @@ function compareLocations(a: Location, b: Location): number {
   );
 }
 
+type ForeachVariableCandidate = {
+  condition: SyntaxNode;
+  variable: SyntaxNode;
+  role: 'index' | 'value';
+  scopeRange: Range;
+};
+
+function foreachVariableCandidatesAt(
+  root: SyntaxNode,
+  ref: string,
+  position: Position,
+): ForeachVariableCandidate[] {
+  const candidates: ForeachVariableCandidate[] = [];
+
+  function visit(node: SyntaxNode): void {
+    if (
+      node.type === 'foreach_cond' &&
+      foreachConditionVisibleAt(node, position)
+    ) {
+      for (const variable of directChildrenOfType(node, 'foreach_var')) {
+        const name = directChildOfType(variable, 'ident');
+        if (name?.text !== ref) continue;
+
+        const owner =
+          ancestorOfType(node, 'foreach_stmt') ?? node.parent ?? node;
+
+        candidates.push({
+          condition: node,
+          variable,
+          role: foreachVariableRole(node, variable),
+          scopeRange: rangeFromNode(owner),
+        });
+      }
+    }
+
+    for (const child of node.namedChildren) {
+      visit(child);
+    }
+  }
+
+  visit(root);
+
+  return candidates.sort(
+    (a, b) =>
+      rangeSize(a.scopeRange) - rangeSize(b.scopeRange) ||
+      comparePositions(
+        rangeFromNode(b.condition).start,
+        rangeFromNode(a.condition).start,
+      ),
+  );
+}
+
+function foreachConditionVisibleAt(
+  condition: SyntaxNode,
+  position: Position,
+): boolean {
+  if (comparePositions(rangeFromNode(condition).start, position) > 0) {
+    return false;
+  }
+
+  const owner = ancestorOfType(condition, 'foreach_stmt') ?? condition.parent;
+  if (!owner) return false;
+
+  const body = owner.childForFieldName('body');
+  if (body && positionInRange(position, rangeFromNode(body))) return true;
+
+  return positionInRange(position, rangeFromNode(owner));
+}
+
+function foreachVariableRole(
+  condition: SyntaxNode,
+  variable: SyntaxNode,
+): 'index' | 'value' {
+  const index = condition.childForFieldName('index');
+  if (index && sameSyntaxNode(index, variable)) return 'index';
+
+  const value = condition.childForFieldName('value');
+  if (value && sameSyntaxNode(value, variable)) return 'value';
+
+  const variables = directChildrenOfType(condition, 'foreach_var');
+  return variables.length > 1 && sameSyntaxNode(variables[0], variable)
+    ? 'index'
+    : 'value';
+}
+
+function foreachVariableByReference(variable: SyntaxNode): boolean {
+  const name = directChildOfType(variable, 'ident');
+  if (!name) return false;
+
+  const prefix = variable.text.slice(
+    0,
+    Math.max(0, variable.text.lastIndexOf(name.text)),
+  );
+  return prefix.includes('&');
+}
+
+function varDeclarationCandidatesAt(
+  root: SyntaxNode,
+  ref: string,
+  position: Position,
+): SyntaxNode[] {
+  const candidates: Array<{ declaration: SyntaxNode; scopeRange: Range }> = [];
+
+  function visit(node: SyntaxNode): void {
+    if (node.type === 'var_declaration') {
+      const name = node.childForFieldName('name');
+      const scope =
+        ancestorOfType(node, 'compound_stmt') ??
+        ancestorOfType(node, 'ERROR') ??
+        node.parent;
+
+      if (
+        name?.text === ref &&
+        scope &&
+        varDeclarationAllowed(node) &&
+        comparePositions(rangeFromNode(name).end, position) <= 0 &&
+        positionInRange(position, rangeFromNode(scope))
+      ) {
+        candidates.push({
+          declaration: node,
+          scopeRange: rangeFromNode(scope),
+        });
+      }
+    }
+
+    for (const child of node.namedChildren) {
+      visit(child);
+    }
+  }
+
+  visit(root);
+
+  return candidates
+    .sort(
+      (a, b) =>
+        rangeSize(a.scopeRange) - rangeSize(b.scopeRange) ||
+        comparePositions(
+          rangeFromNode(b.declaration).start,
+          rangeFromNode(a.declaration).start,
+        ),
+    )
+    .map((candidate) => candidate.declaration);
+}
+
+function varDeclarationAllowed(declaration: SyntaxNode): boolean {
+  return (
+    !!ancestorOfType(declaration, 'macro_declaration') ||
+    hasAttribute(declaration, '@safeinfer') ||
+    varDeclarationInitializesLambda(declaration)
+  );
+}
+
+function varDeclarationInitializesLambda(declaration: SyntaxNode): boolean {
+  const right = declaration.childForFieldName('right');
+
+  return !!right && right.type.startsWith('lambda_');
+}
+
+function hasAttribute(node: SyntaxNode, name: string): boolean {
+  for (const attributes of directChildrenOfType(node, 'attributes')) {
+    for (const attribute of directChildrenOfType(attributes, 'attribute')) {
+      if (attribute.text.split('(')[0] === name) return true;
+    }
+  }
+
+  return false;
+}
+
 function fieldExpressionAt(
   parsed: ParsedDocument,
   ref: string,
@@ -1324,6 +1621,21 @@ function ancestorOfType(
   }
 
   return undefined;
+}
+
+function directChildOfType(
+  node: SyntaxNode,
+  type: string,
+): SyntaxNode | undefined {
+  return node.namedChildren.find((child) => child.type === type);
+}
+
+function directChildrenOfType(node: SyntaxNode, type: string): SyntaxNode[] {
+  return node.namedChildren.filter((child) => child.type === type);
+}
+
+function sameSyntaxNode(a: SyntaxNode, b: SyntaxNode): boolean {
+  return a.startIndex === b.startIndex && a.endIndex === b.endIndex;
 }
 
 function rangeFromNode(node: SyntaxNode): Range {
@@ -1480,7 +1792,8 @@ function recoverableLocalTypeName(
   let found: string | undefined;
 
   while ((match = declaration.exec(before))) {
-    found = match[1].trim();
+    const candidate = match[1].trim();
+    if (candidate !== 'var') found = candidate;
   }
 
   return found;
@@ -1538,7 +1851,16 @@ function isTypeSymbol(symbol: C3Symbol): boolean {
   return (
     symbol.kind === SymbolKind.Struct ||
     symbol.kind === SymbolKind.Enum ||
-    symbol.kind === SymbolKind.Interface
+    symbol.kind === SymbolKind.Interface ||
+    isConstdefSymbol(symbol)
+  );
+}
+
+function isConstdefSymbol(symbol: C3Symbol): boolean {
+  return (
+    symbol.kind === SymbolKind.Constant &&
+    symbol.signature.startsWith('constdef ') &&
+    symbol.children.length > 0
   );
 }
 

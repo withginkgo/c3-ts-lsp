@@ -195,6 +195,51 @@ test('ProjectIndex resolves relative module aliases', () => {
   assert.equal(result.selected?.uri, netUri);
 });
 
+test('ProjectIndex resolves implicitly imported std::core symbols', () => {
+  const index = new ProjectIndex();
+  const appUri = 'file:///workspace/app.c3';
+  const builtinUri = 'file:///stdlib/std/core/builtin.c3';
+  const appSource = [
+    'module app;',
+    'fn void use() {',
+    '    unreachable("listen failed");',
+    '}',
+    '',
+  ].join('\n');
+  const doc = TextDocument.create(appUri, 'c3', 1, appSource);
+
+  index.upsert(parseSource(appUri, appSource), false);
+  index.upsert(
+    parseSource(
+      builtinUri,
+      [
+        'module std::core::builtin;',
+        'macro void unreachable(String string = "Unreachable statement reached.", ...) @builtin @noreturn',
+        '{',
+        '}',
+        '',
+      ].join('\n'),
+      { sourceKind: 'stdlib' },
+    ),
+    false,
+  );
+  index.rebuild();
+
+  const result = index.resolveSymbol(
+    appUri,
+    'unreachable',
+    doc.positionAt(appSource.indexOf('unreachable')),
+  );
+
+  assert.equal(result.reason, 'resolved');
+  assert.equal(result.selected?.uri, builtinUri);
+  assert.equal(
+    index.importCandidatesForSymbol(index.getParsed(appUri)!, 'unreachable')
+      .length,
+    0,
+  );
+});
+
 test('ProjectIndex filters private imported symbols', () => {
   const index = new ProjectIndex();
   const appUri = 'file:///workspace/app.c3';
@@ -553,7 +598,47 @@ test('ProjectIndex resolves methods through generic field receiver types', () =>
   assert.equal(pollField.selected?.signature, 'int fd;');
 });
 
-test('ProjectIndex selects basic overloads by argument type', () => {
+test('ProjectIndex infers foreach value variable types from collection expressions', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'struct Poll {',
+    '    int fd;',
+    '}',
+    'struct EventLoop {',
+    '    Poll[] polls;',
+    '}',
+    'fn void EventLoop.run(&self) {',
+    '    foreach (&p : self.polls) {',
+    '        p.fd;',
+    '    }',
+    '}',
+    '',
+  ].join('\n');
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+
+  index.upsert(parseSource(uri, source));
+
+  const result = index.resolveSymbol(
+    uri,
+    'fd',
+    doc.positionAt(source.lastIndexOf('fd')),
+  );
+
+  assert.equal(
+    index.typeNameForExpression(
+      uri,
+      'p',
+      doc.positionAt(source.lastIndexOf('p.fd')),
+    ),
+    'Poll*',
+  );
+  assert.equal(result.reason, 'resolved');
+  assert.equal(result.selected?.signature, 'int fd;');
+});
+
+test('ProjectIndex reports duplicate callable names as ambiguous', () => {
   const index = new ProjectIndex();
   const uri = 'file:///workspace/app.c3';
   const source = [
@@ -570,21 +655,44 @@ test('ProjectIndex selects basic overloads by argument type', () => {
 
   index.upsert(parseSource(uri, source));
 
-  const intResult = index.resolveSymbol(
+  const result = index.resolveSymbol(
     uri,
     'add',
     doc.positionAt(source.indexOf('add(1);')),
   );
-  const floatResult = index.resolveSymbol(
-    uri,
-    'add',
-    doc.positionAt(source.indexOf('add(1.0);')),
-  );
 
-  assert.equal(intResult.reason, 'resolved');
-  assert.equal(intResult.selected?.signature, 'int add(int a)');
-  assert.equal(floatResult.reason, 'resolved');
-  assert.equal(floatResult.selected?.signature, 'float add(float a)');
+  assert.equal(result.reason, 'ambiguous');
+  assert.deepEqual(
+    result.candidates.map((candidate) => candidate.signature),
+    ['int add(int a)', 'float add(float a)'],
+  );
+});
+
+test('ProjectIndex infers enum constant expression types', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'enum SocketOption : char {',
+    '    REUSEADDR,',
+    '}',
+    'fn void use() {',
+    '    var option @safeinfer = SocketOption.REUSEADDR;',
+    '}',
+    '',
+  ].join('\n');
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+
+  index.upsert(parseSource(uri, source));
+
+  assert.equal(
+    index.typeNameForExpression(
+      uri,
+      'SocketOption.REUSEADDR',
+      doc.positionAt(source.indexOf('SocketOption.REUSEADDR')),
+    ),
+    'SocketOption',
+  );
 });
 
 test('ProjectIndex exposes visible scoped symbols at a position', () => {

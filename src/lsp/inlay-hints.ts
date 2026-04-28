@@ -18,7 +18,12 @@ export function inlayHints(
 
   const hints: InlayHint[] = [];
 
-  for (const declaration of descendantsOfType(current.tree.rootNode, 'var_declaration')) {
+  for (const declaration of descendantsOfType(
+    current.tree.rootNode,
+    'var_declaration',
+  )) {
+    if (!varDeclarationAllowed(declaration)) continue;
+
     const name = declaration.childForFieldName('name');
     const right = declaration.childForFieldName('right');
     if (!name || !right || !positionInRange(rangeFromNode(name).start, range)) {
@@ -46,6 +51,44 @@ export function inlayHints(
   return hints;
 }
 
+function varDeclarationAllowed(declaration: SyntaxNode): boolean {
+  return (
+    !!ancestorOfType(declaration, 'macro_declaration') ||
+    hasAttribute(declaration, '@safeinfer') ||
+    varDeclarationInitializesLambda(declaration)
+  );
+}
+
+function varDeclarationInitializesLambda(declaration: SyntaxNode): boolean {
+  const right = declaration.childForFieldName('right');
+
+  return !!right && right.type.startsWith('lambda_');
+}
+
+function hasAttribute(node: SyntaxNode, name: string): boolean {
+  for (const attributes of directChildrenOfType(node, 'attributes')) {
+    for (const attribute of directChildrenOfType(attributes, 'attribute')) {
+      if (attribute.text.split('(')[0] === name) return true;
+    }
+  }
+
+  return false;
+}
+
+function ancestorOfType(
+  node: SyntaxNode | null,
+  type: string,
+): SyntaxNode | undefined {
+  let current = node?.parent;
+
+  while (current) {
+    if (current.type === type) return current;
+    current = current.parent;
+  }
+
+  return undefined;
+}
+
 function descendantsOfType(node: SyntaxNode, type: string): SyntaxNode[] {
   const found: SyntaxNode[] = [];
 
@@ -55,6 +98,10 @@ function descendantsOfType(node: SyntaxNode, type: string): SyntaxNode[] {
   }
 
   return found;
+}
+
+function directChildrenOfType(node: SyntaxNode, type: string): SyntaxNode[] {
+  return node.namedChildren.filter((child) => child.type === type);
 }
 
 function positionInRange(position: Position, range: Range): boolean {

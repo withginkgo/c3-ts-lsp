@@ -26,10 +26,13 @@ export function signatureHelp(
   const functionNode = call.childForFieldName('function');
   if (!functionNode) return null;
 
+  const callTarget = callTargetFor(functionNode);
+  if (!callTarget) return null;
+
   const result = index.resolveSymbol(
     current.uri,
-    functionNode.text,
-    rangeFromNode(functionNode).start,
+    callTarget.ref,
+    callTarget.position,
   );
   const callables = (result.selected ? [result.selected] : result.candidates)
     .filter(isCallableSymbol);
@@ -42,8 +45,8 @@ export function signatureHelp(
     signatures: callables.map((symbol): SignatureInformation => ({
       label: symbol.signature,
       documentation: symbol.documentation,
-      parameters: symbol.parameters.map((parameter) =>
-        ParameterInformation.create(parameter),
+      parameters: signatureParameters(symbol, callTarget.methodStyle).map(
+        (parameter) => ParameterInformation.create(parameter),
       ),
     })),
     activeSignature: 0,
@@ -51,10 +54,37 @@ export function signatureHelp(
   };
 }
 
+function callTargetFor(
+  functionNode: SyntaxNode,
+): { ref: string; position: Position; methodStyle: boolean } | null {
+  if (functionNode.type === 'field_expr') {
+    const field = functionNode.childForFieldName('field');
+    if (!field) return null;
+
+    return {
+      ref: field.text,
+      position: rangeFromNode(field).start,
+      methodStyle: true,
+    };
+  }
+
+  return {
+    ref: functionNode.text,
+    position: rangeFromNode(functionNode).start,
+    methodStyle: false,
+  };
+}
+
 function isCallableSymbol(symbol: C3Symbol): boolean {
   return (
     symbol.kind === SymbolKind.Function || symbol.kind === SymbolKind.Method
   );
+}
+
+function signatureParameters(symbol: C3Symbol, methodStyle: boolean): string[] {
+  return methodStyle && symbol.kind === SymbolKind.Method
+    ? symbol.parameters.slice(1)
+    : symbol.parameters;
 }
 
 function callExpressionAtPosition(

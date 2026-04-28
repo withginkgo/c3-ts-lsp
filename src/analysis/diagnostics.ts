@@ -14,9 +14,17 @@ export function semanticDiagnostics(
   index: ProjectIndex,
   parsed: ParsedDocument,
 ): Diagnostic[] {
-  return [
+  const importDiagnostics = [
     ...unresolvedImportDiagnostics(index, parsed),
     ...unresolvedModuleAliasDiagnostics(index, parsed),
+  ];
+
+  if (parsed.diagnostics.length > 0) {
+    return importDiagnostics;
+  }
+
+  return [
+    ...importDiagnostics,
     ...referenceDiagnostics(index, parsed),
   ];
 }

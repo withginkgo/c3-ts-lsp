@@ -27,7 +27,8 @@ The server currently provides a working prototype:
 - Lightweight expression type inference for chained members, function call
   return values, subscript receivers, parenthesized expressions, and simple
   pointer-style unary expressions.
-- Basic overload narrowing by call arity and literal argument type.
+- Default-parameter signatures and ambiguous duplicate symbol handling that
+  match C3's non-overloaded function and method model.
 - Member completions while editing incomplete member access such as `res.`.
 - Type usage references for type declarations.
 - Workspace symbols for project declarations and nested members.
@@ -40,6 +41,8 @@ The server currently provides a working prototype:
 - Semantic diagnostics for unresolved imports, unresolved module aliases,
   unresolved expression symbols, unresolved members, and ambiguous expression
   symbols.
+- Optional compiler-backed diagnostics through configured `c3c --lsp` output,
+  debounced with stale-run protection.
 - Standard library files participate in resolution but do not publish
   diagnostics.
 - Syntax diagnostics from tree-sitter parse errors.
@@ -49,7 +52,7 @@ The server currently provides a working prototype:
 
 The implementation is still intentionally lightweight. It has project/module
 resolution, basic scoped local lookup, simple member type analysis, basic
-overload narrowing, and the core daily editing LSP surface. It does not yet
+default-parameter awareness, and the core daily editing LSP surface. It does not yet
 model full C3 type relationships, implicit conversions, broad compiler-backed
 analysis, or editor packaging.
 
@@ -122,6 +125,8 @@ Status: completed in Unreleased.
 
 - Model imports, aliases, relative module paths, public/private visibility, and
   duplicate module files.
+- Parse `project.json`/`.c3l` manifests, select a project target, and constrain
+  indexing to configured sources, tests, and dependency files.
 - Track workspace folders and update the index when files are created, changed,
   renamed, or deleted.
 - Add a resolver API that returns all candidates plus the selected candidate.
@@ -144,7 +149,7 @@ Status: partially completed in Unreleased.
 - Resolve identifiers from inner scope to module/import scope.
 - Track basic type information for declarations and expressions.
 - Support member access, pointer/member dereference, namespace-qualified names,
-  and basic overload candidates.
+  default parameters, and C3's method call syntax.
 
 Exit criteria:
 
@@ -162,8 +167,9 @@ Goal: make the server useful during editing, not only navigation.
 - Publish semantic diagnostics for unresolved imports, unresolved symbols,
   duplicate declarations, ambiguous references, and invalid member access.
 - Optionally integrate `c3c` diagnostics when a compiler executable is
-  configured.
-- Debounce diagnostics and avoid publishing stale results.
+  configured. Done for `c3c --lsp` diagnostic output.
+- Debounce diagnostics and avoid publishing stale results. Done for compiler
+  diagnostics; lightweight syntax/semantic diagnostics remain synchronous.
 
 Exit criteria:
 
@@ -233,7 +239,6 @@ Exit criteria:
 
 1. Split scope, resolver, and type inference out of `project-index.ts` once the
    current behavior stabilizes.
-2. Add signature help using the overload candidate data already returned by the
-   resolver.
+2. Expand signature help around default, named, and variadic parameters.
 3. Extend type analysis for implicit conversions, enum values, aliases,
    typedefs, and method-style calls.

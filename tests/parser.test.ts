@@ -113,6 +113,30 @@ test('parseSource extracts module aliases', () => {
   ]);
 });
 
+test('parseSource extracts type alias targets', () => {
+  const parsed = parseSource(
+    'file:///workspace/types.c3',
+    [
+      'module app;',
+      'typedef TcpServerSocket = inline Socket;',
+      'alias UserName = String;',
+      '',
+    ].join('\n'),
+  );
+
+  assert.deepEqual(
+    parsed.symbols.map((symbol) => [
+      symbol.name,
+      symbol.signature,
+      symbol.returnType,
+    ]),
+    [
+      ['TcpServerSocket', 'typedef TcpServerSocket = inline Socket;', 'Socket'],
+      ['UserName', 'alias UserName = String;', 'String'],
+    ],
+  );
+});
+
 test('parseSource extracts Phase 1 top-level declaration coverage', () => {
   const file = 'testdata/phase1/syntax.c3';
   const parsed = parseSource(
@@ -157,6 +181,7 @@ test('parseSource extracts nested members, parameters, docs, attrs, and body ran
   const user = parsed.symbols.find((symbol) => symbol.name === 'User');
   const name = user?.children.find((symbol) => symbol.name === 'name');
   const color = parsed.symbols.find((symbol) => symbol.name === 'Color');
+  const errorCode = parsed.symbols.find((symbol) => symbol.name === 'ErrorCode');
   const reader = parsed.symbols.find((symbol) => symbol.name === 'Reader');
   const trace = parsed.symbols.find((symbol) => symbol.name === 'trace');
   const add = parsed.symbols.find((symbol) => symbol.name === 'add');
@@ -178,8 +203,19 @@ test('parseSource extracts nested members, parameters, docs, attrs, and body ran
   assert.equal(name?.documentation, '"Field docs"');
   assert.deepEqual(name?.attributes, ['@required']);
   assert.deepEqual(
-    color?.children.map((symbol) => symbol.name),
-    ['RED', 'GREEN', 'BLUE'],
+    color?.children.map((symbol) => [symbol.name, symbol.returnType]),
+    [
+      ['RED', 'Color'],
+      ['GREEN', 'Color'],
+      ['BLUE', 'Color'],
+    ],
+  );
+  assert.deepEqual(
+    errorCode?.children.map((symbol) => [symbol.name, symbol.returnType]),
+    [
+      ['OK', 'ErrorCode'],
+      ['FAIL', 'ErrorCode'],
+    ],
   );
   assert.deepEqual(
     reader?.children.map((symbol) => [
@@ -273,6 +309,47 @@ test('parseSource recovers top-level callables after parser errors', () => {
   );
 });
 
+test('parseSource recovers enum declarations after parser errors', () => {
+  const parsed = parseSource(
+    'file:///workspace/std/net/socket.c3',
+    [
+      'module std::net;',
+      '???',
+      'enum SocketOption : char (CInt value)',
+      '{',
+      '    REUSEADDR                  { os::SO_REUSEADDR },',
+      '    REUSEPORT @if(!env::WIN32) { os::SO_REUSEPORT },',
+      '}',
+      '',
+    ].join('\n'),
+  );
+  const socketOption = parsed.symbols.find(
+    (symbol) => symbol.name === 'SocketOption',
+  );
+
+  assert.equal(socketOption?.kind, SymbolKind.Enum);
+  assert.equal(socketOption?.signature, 'enum SocketOption : char (CInt value)');
+  assert.deepEqual(
+    socketOption?.children.map((symbol) => [
+      symbol.name,
+      symbol.kind,
+      symbol.signature,
+    ]),
+    [
+      [
+        'REUSEADDR',
+        SymbolKind.Constant,
+        'REUSEADDR                  { os::SO_REUSEADDR }',
+      ],
+      [
+        'REUSEPORT',
+        SymbolKind.Constant,
+        'REUSEPORT @if(!env::WIN32) { os::SO_REUSEPORT }',
+      ],
+    ],
+  );
+});
+
 test('parseSource recovers type methods after parser errors', () => {
   const parsed = parseSource(
     'file:///workspace/std/collections/map.c3',
@@ -317,5 +394,69 @@ test('parseSource recovers type methods after parser errors', () => {
         ],
       ],
     ],
+  );
+});
+
+test('parseSource extracts var declarations as scoped symbols', () => {
+  const parsed = parseSource(
+    'file:///workspace/app.c3',
+    [
+      'module app;',
+      'fn void use() {',
+      '    var name @safeinfer = "C3";',
+      '    name;',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  assert.equal(
+    parsed.scopedSymbols.find((symbol) => symbol.name === 'name')?.signature,
+    'var name @safeinfer = "C3";',
+  );
+  assert.deepEqual(
+    parsed.scopedSymbols.find((symbol) => symbol.name === 'name')?.attributes,
+    ['@safeinfer'],
+  );
+});
+
+test('parseSource extracts for initializer declarations as scoped symbols', () => {
+  const parsed = parseSource(
+    'file:///workspace/app.c3',
+    [
+      'module app;',
+      'fn void use() {',
+      '    for (int i = 0; i < 4; i++) {',
+      '        i;',
+      '    }',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  const symbol = parsed.scopedSymbols.find((symbol) => symbol.name === 'i');
+
+  assert.equal(symbol?.signature, 'int i = 0');
+  assert.equal(symbol?.returnType, 'int');
+  assert.equal(symbol?.scopeRange?.start.line, 2);
+  assert.equal(symbol?.scopeRange?.end.line, 4);
+});
+
+test('parseSource skips unsafe var declarations in normal functions', () => {
+  const parsed = parseSource(
+    'file:///workspace/app.c3',
+    [
+      'module app;',
+      'fn void use() {',
+      '    var name = "C3";',
+      '    name;',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  assert.equal(
+    parsed.scopedSymbols.some((symbol) => symbol.name === 'name'),
+    false,
   );
 });

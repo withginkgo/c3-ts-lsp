@@ -46,7 +46,7 @@ export function watchWorkspace(
     reporter.error?.(`workspace watcher error: ${String(err)}`);
   });
 
-  reporter.log?.(`watching C3 files in ${root}`);
+  reporter.log?.(`watching C3 project files in ${root}`);
 
   return {
     close() {
@@ -65,10 +65,10 @@ function pollWorkspace(
   handlers: WorkspaceWatchHandlers,
   reporter: WorkspaceWatchReporter,
 ): WorkspaceWatcher {
-  let previous = snapshotC3Files(root);
+  let previous = snapshotWorkspaceFiles(root);
 
   const interval = setInterval(() => {
-    const current = snapshotC3Files(root);
+    const current = snapshotWorkspaceFiles(root);
 
     for (const [filePath, mtimeMs] of current) {
       if (previous.get(filePath) !== mtimeMs) {
@@ -85,7 +85,7 @@ function pollWorkspace(
     previous = current;
   }, 1_500);
 
-  reporter.log?.(`polling C3 files in ${root}`);
+  reporter.log?.(`polling C3 project files in ${root}`);
 
   return {
     close() {
@@ -94,10 +94,13 @@ function pollWorkspace(
   };
 }
 
-function snapshotC3Files(root: string): Map<string, number> {
+function snapshotWorkspaceFiles(root: string): Map<string, number> {
   const snapshot = new Map<string, number>();
 
-  for (const filePath of collectC3Files(root)) {
+  for (const filePath of [
+    ...collectC3Files(root),
+    ...collectProjectConfigFiles(root),
+  ]) {
     try {
       snapshot.set(filePath, fs.statSync(filePath).mtimeMs);
     } catch {
@@ -106,6 +109,39 @@ function snapshotC3Files(root: string): Map<string, number> {
   }
 
   return snapshot;
+}
+
+function collectProjectConfigFiles(root: string): string[] {
+  const result: string[] = [];
+
+  function walkDir(dir: string): void {
+    const base = path.basename(dir);
+    if (skippedDirectories.has(base)) return;
+
+    let entries: fs.Dirent[];
+
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+
+      if (entry.isDirectory()) {
+        walkDir(full);
+        continue;
+      }
+
+      if (entry.isFile() && isProjectConfigFile(full)) {
+        result.push(full);
+      }
+    }
+  }
+
+  walkDir(root);
+  return result;
 }
 
 function scheduleFileEvent(
@@ -151,8 +187,13 @@ function handleFileEvent(
 }
 
 function shouldHandlePath(filePath: string): boolean {
-  if (!isC3SourceFile(filePath)) return false;
+  if (!isC3SourceFile(filePath) && !isProjectConfigFile(filePath)) return false;
 
   const parts = path.normalize(filePath).split(path.sep);
   return !parts.some((part) => skippedDirectories.has(part));
+}
+
+function isProjectConfigFile(filePath: string): boolean {
+  const base = path.basename(filePath);
+  return base === 'project.json' || base === 'manifest.json';
 }

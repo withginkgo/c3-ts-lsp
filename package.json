@@ -24,7 +24,7 @@
   },
   "dependencies": {
     "tree-sitter": "^0.25.0",
-    "tree-sitter-c3": "github:c3lang/tree-sitter-c3",
+    "tree-sitter-c3": "github:c3lang/tree-sitter-c3#c3-0.8",
     "vscode-languageserver": "^9.0.1",
     "vscode-languageserver-textdocument": "^1.0.12"
   },

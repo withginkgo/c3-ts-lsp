@@ -146,6 +146,42 @@ test('completionItems returns members for incomplete member access', () => {
   );
 });
 
+test('completionItems infers foreach by-reference variables for incomplete member access', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'struct Poll {',
+    '    PollEvent revents;',
+    '}',
+    'struct EventLoop {',
+    '    Poll[] polls;',
+    '}',
+    'fn void EventLoop.run(&self) {',
+    '    foreach (&p : self.polls) {',
+    '        p.',
+    '    }',
+    '}',
+    '',
+  ].join('\n');
+  const parsed = parseSource(uri, source);
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+
+  index.upsert(parsed);
+
+  const items = completionItems(
+    index,
+    doc,
+    parsed,
+    doc.positionAt(source.lastIndexOf('p.') + 'p.'.length),
+  );
+
+  assert.deepEqual(
+    items.map((item) => [item.label, item.kind, item.detail]),
+    [['revents', CompletionItemKind.Field, 'PollEvent revents;']],
+  );
+});
+
 test('completionItems returns members for chained expression receivers', () => {
   const index = new ProjectIndex();
   const uri = 'file:///workspace/app.c3';
@@ -189,6 +225,39 @@ test('completionItems returns members for chained expression receivers', () => {
   assert.deepEqual(
     callItems.map((item) => [item.label, item.kind, item.detail]),
     [['value', CompletionItemKind.Field, 'int value;']],
+  );
+});
+
+test('completionItems infers var declarations from initializer expressions', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'struct HttpResponse {',
+    '    String body;',
+    '}',
+    'fn HttpResponse make_response() {}',
+    'fn void use() {',
+    '    var response @safeinfer = make_response();',
+    '    response.',
+    '}',
+    '',
+  ].join('\n');
+  const parsed = parseSource(uri, source);
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+
+  index.upsert(parsed);
+
+  const items = completionItems(
+    index,
+    doc,
+    parsed,
+    doc.positionAt(source.indexOf('response.') + 'response.'.length),
+  );
+
+  assert.deepEqual(
+    items.map((item) => [item.label, item.kind, item.detail]),
+    [['body', CompletionItemKind.Field, 'String body;']],
   );
 });
 
@@ -302,6 +371,216 @@ test('completionItems returns module alias members after a module prefix', () =>
     items.map((item) => [item.label, item.kind, item.detail]),
     [['connect', CompletionItemKind.Function, 'void connect()']],
   );
+});
+
+test('completionItems returns child modules after a module namespace prefix', () => {
+  const index = new ProjectIndex();
+  const appUri = 'file:///workspace/app.c3';
+  const appSource = ['module app;', 'import std::', ''].join('\n');
+  const parsedApp = parseSource(appUri, appSource);
+  const doc = TextDocument.create(appUri, 'c3', 1, appSource);
+
+  index.upsert(parsedApp, false);
+  index.upsert(
+    parseSource('file:///stdlib/std/net.c3', 'module std::net;\n', {
+      sourceKind: 'stdlib',
+    }),
+    false,
+  );
+  index.upsert(
+    parseSource('file:///stdlib/std/io.c3', 'module std::io;\n', {
+      sourceKind: 'stdlib',
+    }),
+    false,
+  );
+  index.rebuild();
+
+  const items = completionItems(
+    index,
+    doc,
+    parsedApp,
+    doc.positionAt(appSource.indexOf('std::') + 'std::'.length),
+  );
+
+  assert.deepEqual(
+    items.map((item) => [item.label, item.kind, item.detail]),
+    [
+      ['io', CompletionItemKind.Module, 'module std::io'],
+      ['net', CompletionItemKind.Module, 'module std::net'],
+    ],
+  );
+});
+
+test('completionItems returns stdlib enum constants and inline typedef members', () => {
+  const index = new ProjectIndex();
+  const appUri = 'file:///workspace/app.c3';
+  const appSource = [
+    'module poll_demo;',
+    'import std::net,std::net::tcp;',
+    'fn void run_reactor() {',
+    '    TcpServerSocket listener;',
+    '    net::SocketOption.',
+    '    listener.',
+    '    listener.sock.',
+    '}',
+    '',
+  ].join('\n');
+  const parsedApp = parseSource(appUri, appSource);
+  const doc = TextDocument.create(appUri, 'c3', 1, appSource);
+
+  index.upsert(parsedApp, false);
+  index.upsert(
+    parseSource(
+      'file:///stdlib/std/net/socket.c3',
+      [
+        'module std::net;',
+        'import std::net::os;',
+        'struct Socket {',
+        '    NativeSocket sock;',
+        '}',
+        'enum SocketOption : char (CInt value)',
+        '{',
+        '    REUSEADDR { os::SO_REUSEADDR },',
+        '    REUSEPORT { os::SO_REUSEPORT },',
+        '}',
+        'fn void? Socket.set_option(&self, SocketOption option, bool value) {}',
+        '',
+      ].join('\n'),
+      { sourceKind: 'stdlib' },
+    ),
+    false,
+  );
+  index.upsert(
+    parseSource(
+      'file:///stdlib/std/net/tcp.c3',
+      [
+        'module std::net::tcp;',
+        'import std::net;',
+        'typedef TcpServerSocket = inline Socket;',
+        '',
+      ].join('\n'),
+      { sourceKind: 'stdlib' },
+    ),
+    false,
+  );
+  index.upsert(
+    parseSource(
+      'file:///stdlib/std/net/os/posix.c3',
+      [
+        'module std::net::os;',
+        'typedef NativeSocket = inline Fd;',
+        'macro void? NativeSocket.set_non_blocking(self, bool non_blocking) {}',
+        '',
+      ].join('\n'),
+      { sourceKind: 'stdlib' },
+    ),
+    false,
+  );
+  index.rebuild();
+
+  const enumItems = completionItems(
+    index,
+    doc,
+    parsedApp,
+    doc.positionAt(
+      appSource.indexOf('net::SocketOption.') + 'net::SocketOption.'.length,
+    ),
+  );
+  const listenerItems = completionItems(
+    index,
+    doc,
+    parsedApp,
+    doc.positionAt(appSource.indexOf('listener.') + 'listener.'.length),
+  );
+  const sockItems = completionItems(
+    index,
+    doc,
+    parsedApp,
+    doc.positionAt(appSource.indexOf('listener.sock.') + 'listener.sock.'.length),
+  );
+
+  assert.equal(
+    enumItems.find((item) => item.label === 'REUSEADDR')?.kind,
+    CompletionItemKind.Constant,
+  );
+  assert.equal(
+    enumItems.find((item) => item.label === 'REUSEPORT')?.kind,
+    CompletionItemKind.Constant,
+  );
+  assert.equal(
+    listenerItems.find((item) => item.label === 'set_option')?.kind,
+    CompletionItemKind.Method,
+  );
+  assert.equal(
+    listenerItems.find((item) => item.label === 'sock')?.kind,
+    CompletionItemKind.Field,
+  );
+  assert.equal(
+    sockItems.find((item) => item.label === 'set_non_blocking')?.kind,
+    CompletionItemKind.Method,
+  );
+});
+
+test('completionItems returns constdef constants for partial member access', () => {
+  const index = new ProjectIndex();
+  const appUri = 'file:///workspace/app.c3';
+  const appSource = [
+    'module poll_demo;',
+    'import std::net;',
+    'fn void read() {}',
+    'fn void use() {',
+    '    PollSubscribe.R',
+    '}',
+    '',
+  ].join('\n');
+  const parsedApp = parseSource(appUri, appSource);
+  const doc = TextDocument.create(appUri, 'c3', 1, appSource);
+
+  index.upsert(parsedApp, false);
+  index.upsert(
+    parseSource(
+      'file:///stdlib/std/net/socket.c3',
+      [
+        'module std::net;',
+        'import std::net::os;',
+        'constdef PollSubscribe : ushort',
+        '{',
+        '    ANY_READ     = os::POLLIN,',
+        '    PRIO_READ    = os::POLLPRI,',
+        '    OOB_READ     = os::POLLRDBAND,',
+        '    READ         = os::POLLRDNORM,',
+        '    ANY_WRITE    = os::POLLOUT,',
+        '    OOB_WRITE    = os::POLLWRBAND,',
+        '    WRITE        = os::POLLWRNORM,',
+        '}',
+        '',
+      ].join('\n'),
+      { sourceKind: 'stdlib' },
+    ),
+    false,
+  );
+  index.rebuild();
+
+  const items = completionItems(
+    index,
+    doc,
+    parsedApp,
+    doc.positionAt(appSource.indexOf('PollSubscribe.R') + 'PollSubscribe.R'.length),
+  );
+
+  assert.deepEqual(
+    items.map((item) => [item.label, item.kind]),
+    [
+      ['ANY_READ', CompletionItemKind.Constant],
+      ['ANY_WRITE', CompletionItemKind.Constant],
+      ['OOB_READ', CompletionItemKind.Constant],
+      ['OOB_WRITE', CompletionItemKind.Constant],
+      ['PRIO_READ', CompletionItemKind.Constant],
+      ['READ', CompletionItemKind.Constant],
+      ['WRITE', CompletionItemKind.Constant],
+    ],
+  );
+  assert.equal(items.some((item) => item.label === 'read'), false);
 });
 
 test('completionItems includes imported symbols and excludes unrelated modules', () => {

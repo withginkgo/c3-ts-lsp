@@ -51,8 +51,9 @@ export function symbolHover(index: ProjectIndex, symbol: C3Symbol): Hover {
 
   sections.push(`module: \`${symbol.moduleName || '<unknown>'}\``);
 
-  if (index.sourceKindForSymbol(symbol) === 'stdlib') {
-    sections.push('source: `stdlib`');
+  const sourceKind = index.sourceKindForSymbol(symbol);
+  if (sourceKind && sourceKind !== 'workspace') {
+    sections.push(`source: \`${sourceKind}\``);
   }
 
   return {

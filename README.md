@@ -8,7 +8,8 @@ symbols, code actions, semantic tokens, and inlay hints.
 
 ## Features
 
-- Workspace-wide C3 indexing for `.c3`, `.c3i`, and `.c3t` files.
+- C3 project-aware indexing for `project.json` sources, tests, targets, and
+  `.c3l` dependency manifests.
 - Configurable standard library indexing for imported stdlib modules.
 - Workspace file watching for created, changed, and deleted C3 source files.
 - Document symbols for top-level C3 declarations.
@@ -22,9 +23,10 @@ symbols, code actions, semantic tokens, and inlay hints.
 - Scope-aware completions for parameters, locals, chained expression receivers,
   incomplete member access, and struct members.
 - Basic expression type analysis for member access, call return values,
-  subscript expressions, pointer-like type suffixes, and simple overload calls.
+  subscript expressions, pointer-like type suffixes, and method-style calls.
 - Syntax and basic semantic diagnostics from tree-sitter parse errors, missing
   imports, unresolved symbols, and ambiguous symbols.
+- Optional compiler-backed diagnostics through a configured `c3c` executable.
 - References for declarations, type usages, scoped locals, and resolved member
   accesses.
 - Workspace symbols for project declarations and nested members.
@@ -49,8 +51,10 @@ src/lsp/code-actions.ts       Quick fixes
 src/lsp/semantic-tokens.ts    Semantic token generation
 src/lsp/inlay-hints.ts        Inlay hint generation
 src/parser/c3-parser.ts       Tree-sitter parsing and symbol extraction
+src/project/project-config.ts C3 project.json/manifest.json discovery
 src/project/project-index.ts  Module index and symbol resolution
 src/toolchain/formatter.ts    Optional external formatter integration
+src/toolchain/c3c.ts          Optional c3c diagnostic integration
 src/workspace/scan.ts         Workspace file discovery and indexing
 src/workspace/watch.ts        Workspace file watching and index updates
 src/analysis/diagnostics.ts   Semantic diagnostic generation
@@ -85,6 +89,23 @@ argument is supplied.
 
 ## Configuration
 
+If the workspace root contains `project.json`, the server parses it as JSONC
+using the same comment/trailing-comma style emitted by `c3c init`. It indexes
+global `sources`, `test-sources`, selected target `sources`, and
+`sources-override`. It also scans configured `dependencies` from
+`dependency-search-paths` by reading each `.c3l/manifest.json`.
+
+By default the first target in `project.json` is selected, matching `c3c build`.
+You can select another project target with initialization options:
+
+```json
+{
+  "initializationOptions": {
+    "projectTarget": "my_target"
+  }
+}
+```
+
 Standard library scanning is opt-in. Provide one or more stdlib source roots
 through LSP initialization options:
 
@@ -104,6 +125,30 @@ with the platform path delimiter.
 
 If `C3_HOME` or `C3C_HOME` is set, the server tries common library subfolders
 under that root.
+
+Compiler-backed diagnostics are opt-in. Enable them with initialization
+options:
+
+```json
+{
+  "initializationOptions": {
+    "compilerDiagnostics": true
+  }
+}
+```
+
+When diagnostics are enabled, the server uses a configured `c3cCommand` or
+falls back to `c3c` on `PATH`. `c3cCommand` can be a string or an array such as
+`["/path/to/c3c", "--target", "x64-linux"]`. The server runs `c3c` with
+`--lsp`, `--ansi=no`, and `-C`. If the workspace has `project.json`, it checks
+the project with `build <projectTarget>` when a target is selected; otherwise it
+checks indexed workspace files with `compile-only`. For custom setups, provide
+`compilerCheckArgs`, where `${workspaceRoot}`, `${stdlibRoot}`,
+`${projectTarget}`, and `${files}` are expanded before execution.
+
+Compiler diagnostics are debounced and ignored if a newer run starts. Because
+`c3c` reads files from disk, diagnostics from `c3c` are cleared for unsaved
+buffers and republished after a disk change/save is observed.
 
 ## Versioning and Releases
 

@@ -26,7 +26,7 @@ export function renameSymbol(
 
   const result = index.resolveSymbol(current.uri, ref, position);
   const symbol = result.selected;
-  if (!symbol || index.sourceKindForSymbol(symbol) === 'stdlib') return null;
+  if (!symbol || index.sourceKindForSymbol(symbol) !== 'workspace') return null;
 
   const changes: Record<string, TextEdit[]> = {};
 
@@ -52,7 +52,7 @@ export function prepareRename(
 
   const result = index.resolveSymbol(current.uri, ref, position);
   const symbol = result.selected;
-  if (!symbol || index.sourceKindForSymbol(symbol) === 'stdlib') return null;
+  if (!symbol || index.sourceKindForSymbol(symbol) !== 'workspace') return null;
 
   return {
     range: referenceNameRange(doc, position, symbol.name) ?? symbol.selectionRange,
