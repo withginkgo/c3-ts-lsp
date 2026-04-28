@@ -7,13 +7,14 @@ import {
 import type { TextDocument } from 'vscode-languageserver-textdocument';
 
 import type { ProjectIndex } from '../project/project-index.js';
+import { callableParameters, isCallableSymbol } from '../shared/callable.js';
 import {
   C3_BUILTIN_ATTRIBUTES,
   C3_COMPILE_TIME_BUILTINS,
   C3_DEFINED_CONSTANTS,
   C3_KEYWORDS,
 } from '../shared/language-data.js';
-import type { ParsedDocument } from '../shared/types.js';
+import type { C3Symbol, ParsedDocument } from '../shared/types.js';
 
 export function completionItems(
   index: ProjectIndex,
@@ -40,6 +41,8 @@ export function completionItems(
     return moduleMemberCompletions(index, current, prefix);
   }
 
+  const argumentItems = argumentNameCompletions(index, doc, current, position);
+
   const symbolItems: CompletionItem[] = index
     .visibleSymbolsAt(current.uri, position)
     .map((symbol) => ({
@@ -48,7 +51,7 @@ export function completionItems(
       detail: symbol.signature,
     }));
 
-  return [...keywordCompletions(), ...symbolItems];
+  return [...argumentItems, ...keywordCompletions(), ...symbolItems];
 }
 
 function memberAccessBeforeCursor(
@@ -83,6 +86,138 @@ function modulePrefixBeforeCursor(
   );
 
   return match?.[1] ?? null;
+}
+
+function argumentNameCompletions(
+  index: ProjectIndex,
+  doc: TextDocument,
+  current: ParsedDocument,
+  position: Position,
+): CompletionItem[] {
+  const context = callArgumentContextBeforeCursor(doc, position);
+  if (!context) return [];
+
+  const callable = callableForContext(index, current, context);
+  if (!callable) return [];
+
+  const supplied = namedArgumentsBeforeCursor(context.argumentsText);
+
+  return callableParameters(callable.symbol, {
+    methodStyle: callable.methodStyle,
+  })
+    .filter((parameter) => parameter.name && !supplied.has(parameter.name))
+    .map((parameter) => ({
+      label: parameter.name!,
+      kind: CompletionItemKind.Variable,
+      detail: parameter.label,
+      insertText: `${parameter.name}: `,
+    }));
+}
+
+function callableForContext(
+  index: ProjectIndex,
+  current: ParsedDocument,
+  context: CallArgumentContext,
+): { symbol: C3Symbol; methodStyle: boolean } | null {
+  const method = methodContext(context.callee);
+
+  if (method) {
+    const symbol = index
+      .memberSymbolsForExpression(
+        current.uri,
+        method.receiver,
+        context.calleePosition,
+      )
+      .find((candidate) => candidate.name === method.name);
+
+    return symbol && isCallableSymbol(symbol)
+      ? { symbol, methodStyle: true }
+      : null;
+  }
+
+  const result = index.resolveSymbol(
+    current.uri,
+    context.callee,
+    context.calleePosition,
+  );
+  const symbol = result.selected;
+
+  return symbol && isCallableSymbol(symbol)
+    ? { symbol, methodStyle: false }
+    : null;
+}
+
+type CallArgumentContext = {
+  callee: string;
+  calleePosition: Position;
+  argumentsText: string;
+};
+
+function callArgumentContextBeforeCursor(
+  doc: TextDocument,
+  position: Position,
+): CallArgumentContext | null {
+  const text = doc.getText();
+  const offset = doc.offsetAt(position);
+  const parenOffset = openParenBeforeCursor(text, offset);
+  if (parenOffset == null) return null;
+
+  const calleeMatch = text
+    .slice(0, parenOffset)
+    .match(
+      /([A-Za-z_$@][A-Za-z0-9_$@]*(?:(?:::[A-Za-z_$@][A-Za-z0-9_$@]*)|\.[A-Za-z_$@][A-Za-z0-9_$@]*)*)\s*$/,
+    );
+  if (!calleeMatch?.[1] || calleeMatch.index == null) return null;
+
+  const calleeStart = calleeMatch.index;
+
+  return {
+    callee: calleeMatch[1],
+    calleePosition: doc.positionAt(calleeStart),
+    argumentsText: text.slice(parenOffset + 1, offset),
+  };
+}
+
+function openParenBeforeCursor(text: string, offset: number): number | null {
+  let depth = 0;
+
+  for (let index = offset - 1; index >= 0; index--) {
+    const char = text[index];
+
+    if (char === ')') {
+      depth++;
+      continue;
+    }
+
+    if (char === '(') {
+      if (depth === 0) return index;
+      depth--;
+    }
+  }
+
+  return null;
+}
+
+function methodContext(
+  callee: string,
+): { receiver: string; name: string } | null {
+  const separator = callee.lastIndexOf('.');
+  if (separator <= 0 || separator === callee.length - 1) return null;
+
+  return {
+    receiver: callee.slice(0, separator),
+    name: callee.slice(separator + 1),
+  };
+}
+
+function namedArgumentsBeforeCursor(text: string): Set<string> {
+  const names = new Set<string>();
+
+  for (const match of text.matchAll(/\b([A-Za-z_][A-Za-z0-9_]*)\s*:/g)) {
+    names.add(match[1]);
+  }
+
+  return names;
 }
 
 function keywordCompletions(): CompletionItem[] {
@@ -127,13 +262,13 @@ function moduleMemberCompletions(
   prefix: string,
 ): CompletionItem[] {
   const mod = index.resolveModuleFromPrefix(current, prefix);
-  const moduleItems = index.moduleChildNamesForPrefix(current, prefix).map(
-    (name) => ({
+  const moduleItems = index
+    .moduleChildNamesForPrefix(current, prefix)
+    .map((name) => ({
       label: name,
       kind: CompletionItemKind.Module,
       detail: `module ${prefix}::${name}`,
-    }),
-  );
+    }));
 
   if (!mod) return moduleItems;
 

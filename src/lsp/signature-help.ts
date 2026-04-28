@@ -1,6 +1,5 @@
 import {
   ParameterInformation,
-  SymbolKind,
   type Position,
   type Range,
   type SignatureHelp,
@@ -10,7 +9,13 @@ import type { SyntaxNode } from 'tree-sitter';
 import type { TextDocument } from 'vscode-languageserver-textdocument';
 
 import type { ProjectIndex } from '../project/project-index.js';
-import type { C3Symbol, ParsedDocument } from '../shared/types.js';
+import { isCallableSymbol, callableParameters } from '../shared/callable.js';
+import {
+  callArguments,
+  callTargetFor,
+  rangeFromNode,
+} from '../shared/calls.js';
+import type { C3Parameter, ParsedDocument } from '../shared/types.js';
 
 export function signatureHelp(
   index: ProjectIndex,
@@ -34,57 +39,35 @@ export function signatureHelp(
     callTarget.ref,
     callTarget.position,
   );
-  const callables = (result.selected ? [result.selected] : result.candidates)
-    .filter(isCallableSymbol);
+  const callables = (
+    result.selected ? [result.selected] : result.candidates
+  ).filter(isCallableSymbol);
 
   if (callables.length === 0) return null;
 
-  const activeParameter = activeParameterIndex(doc, call, position);
+  const firstParameters = callableParameters(callables[0]!, {
+    methodStyle: callTarget.methodStyle,
+  });
+  const activeParameter = activeParameterIndex(
+    doc,
+    call,
+    position,
+    firstParameters,
+  );
 
   return {
-    signatures: callables.map((symbol): SignatureInformation => ({
-      label: symbol.signature,
-      documentation: symbol.documentation,
-      parameters: signatureParameters(symbol, callTarget.methodStyle).map(
-        (parameter) => ParameterInformation.create(parameter),
-      ),
-    })),
+    signatures: callables.map(
+      (symbol): SignatureInformation => ({
+        label: symbol.signature,
+        documentation: symbol.documentation,
+        parameters: callableParameters(symbol, {
+          methodStyle: callTarget.methodStyle,
+        }).map((parameter) => ParameterInformation.create(parameter.label)),
+      }),
+    ),
     activeSignature: 0,
     activeParameter,
   };
-}
-
-function callTargetFor(
-  functionNode: SyntaxNode,
-): { ref: string; position: Position; methodStyle: boolean } | null {
-  if (functionNode.type === 'field_expr') {
-    const field = functionNode.childForFieldName('field');
-    if (!field) return null;
-
-    return {
-      ref: field.text,
-      position: rangeFromNode(field).start,
-      methodStyle: true,
-    };
-  }
-
-  return {
-    ref: functionNode.text,
-    position: rangeFromNode(functionNode).start,
-    methodStyle: false,
-  };
-}
-
-function isCallableSymbol(symbol: C3Symbol): boolean {
-  return (
-    symbol.kind === SymbolKind.Function || symbol.kind === SymbolKind.Method
-  );
-}
-
-function signatureParameters(symbol: C3Symbol, methodStyle: boolean): string[] {
-  return methodStyle && symbol.kind === SymbolKind.Method
-    ? symbol.parameters.slice(1)
-    : symbol.parameters;
 }
 
 function callExpressionAtPosition(
@@ -114,7 +97,18 @@ function activeParameterIndex(
   doc: TextDocument,
   call: SyntaxNode,
   position: Position,
+  parameters: C3Parameter[],
 ): number {
+  const activeArg = callArguments(call).find((arg) =>
+    positionInRange(position, arg.range),
+  );
+  if (activeArg?.name) {
+    const namedIndex = parameters.findIndex(
+      (parameter) => parameter.name === activeArg.name,
+    );
+    if (namedIndex >= 0) return namedIndex;
+  }
+
   const args = call.childForFieldName('arguments');
   if (!args) return 0;
 
@@ -122,7 +116,8 @@ function activeParameterIndex(
   const start = args.startIndex + 1;
   if (offset <= start) return 0;
 
-  return countTopLevelCommas(doc.getText().slice(start, offset));
+  const index = countTopLevelCommas(doc.getText().slice(start, offset));
+  return parameters.length > 0 ? Math.min(index, parameters.length - 1) : 0;
 }
 
 function countTopLevelCommas(text: string): number {
@@ -178,17 +173,4 @@ function positionInRange(position: Position, range: Range): boolean {
 function comparePositions(a: Position, b: Position): number {
   if (a.line !== b.line) return a.line - b.line;
   return a.character - b.character;
-}
-
-function rangeFromNode(node: SyntaxNode): Range {
-  return {
-    start: {
-      line: node.startPosition.row,
-      character: node.startPosition.column,
-    },
-    end: {
-      line: node.endPosition.row,
-      character: node.endPosition.column,
-    },
-  };
 }

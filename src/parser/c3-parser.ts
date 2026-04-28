@@ -12,10 +12,12 @@ import { TextDocument } from 'vscode-languageserver-textdocument';
 import type {
   C3Import,
   C3ModuleAlias,
+  C3Parameter,
   C3Symbol,
   ParsedDocument,
   SourceKind,
 } from '../shared/types.js';
+import { parameterDetailFromLabel } from '../shared/callable.js';
 
 const parser = new Parser();
 parser.setLanguage(C3 as Parser.Language);
@@ -36,14 +38,11 @@ export function parseSource(
   const moduleAliases = extractModuleAliases(doc, tree.rootNode);
   const parsedSymbols = extractTopLevelSymbols(doc, tree.rootNode, moduleName);
   const symbols = tree.rootNode.hasError
-    ? mergeRecoveredSymbols(
-        parsedSymbols,
-        [
-          ...recoverTopLevelAggregateSymbols(doc, source, moduleName),
-          ...recoverTopLevelTypeAliasSymbols(doc, source, moduleName),
-          ...recoverTopLevelCallableSymbols(doc, source, moduleName),
-        ],
-      )
+    ? mergeRecoveredSymbols(parsedSymbols, [
+        ...recoverTopLevelAggregateSymbols(doc, source, moduleName),
+        ...recoverTopLevelTypeAliasSymbols(doc, source, moduleName),
+        ...recoverTopLevelCallableSymbols(doc, source, moduleName),
+      ])
     : parsedSymbols;
   const scopedSymbols = extractScopedSymbols(doc, tree.rootNode, moduleName);
   const diagnostics = collectSyntaxDiagnostics(tree.rootNode);
@@ -408,6 +407,7 @@ function functionSymbol(
     bodyNode: node.childForFieldName('body') ?? undefined,
     children: parameterSymbols(doc, node, moduleName, undefined, receiverType),
     parameters: parameterSignatures(node),
+    parameterDetails: parameterDetails(node, receiverType),
     returnType: header?.childForFieldName('return_type')?.text,
     receiverType,
     signature: callableSignature(node, 'func_header', 'func_param_list'),
@@ -430,6 +430,7 @@ function macroSymbol(
     bodyNode: node.childForFieldName('body') ?? undefined,
     children: parameterSymbols(doc, node, moduleName, undefined, receiverType),
     parameters: parameterSignatures(node),
+    parameterDetails: parameterDetails(node, receiverType),
     returnType: header?.childForFieldName('return_type')?.text,
     receiverType,
     signature: `macro ${callableSignature(
@@ -748,7 +749,10 @@ function forInitializerSymbols(
     const scopeNode = nearestAncestorOfTypes(forCond, ['for_stmt']);
     const scopeRange = rangeFromNode(scopeNode ?? forCond);
 
-    for (const declaration of directChildrenOfType(initializer, 'declaration')) {
+    for (const declaration of directChildrenOfType(
+      initializer,
+      'declaration',
+    )) {
       for (const nameNode of declarationNameNodes(declaration)) {
         symbols.push(
           createSymbol(
@@ -797,7 +801,9 @@ function forInitializerSymbols(
 }
 
 function hasAttribute(node: SyntaxNode, name: string): boolean {
-  return attributesFor(node).some((attribute) => attribute.split('(')[0] === name);
+  return attributesFor(node).some(
+    (attribute) => attribute.split('(')[0] === name,
+  );
 }
 
 function foreachVariableSymbols(
@@ -880,7 +886,8 @@ function recoverAggregateSymbol(
         ? SymbolKind.Constant
         : SymbolKind.Struct;
   const children =
-    bodyRange && (match.groups.kind === 'enum' || match.groups.kind === 'constdef')
+    bodyRange &&
+    (match.groups.kind === 'enum' || match.groups.kind === 'constdef')
       ? recoverEnumLikeChildren(
           doc,
           source,
@@ -1072,6 +1079,9 @@ function recoverCallableSymbol(
     returnType: beforeParams.slice(0, -fullName.length).trim() || undefined,
     receiverType,
     parameters: parameterTexts,
+    parameterDetails: parameterTexts.map((parameter, index) =>
+      parameterDetailFromLabel(parameter, index, receiverType),
+    ),
     children: recoveredParameterSymbols(
       doc,
       source,
@@ -1205,6 +1215,7 @@ function createSymbol(
     returnType?: string;
     receiverType?: string;
     parameters?: string[];
+    parameterDetails?: C3Parameter[];
     scopeRange?: Range;
   },
 ): C3Symbol {
@@ -1222,6 +1233,7 @@ function createSymbol(
     returnType: options.returnType,
     receiverType: options.receiverType,
     parameters: options.parameters ?? [],
+    parameterDetails: options.parameterDetails,
     scopeRange: options.scopeRange,
     children: options.children ?? [],
   };
@@ -1274,6 +1286,34 @@ function parameterSignatures(node: SyntaxNode): string[] {
   return descendantsOfType(node, 'param').map((param) =>
     compactText(param.text),
   );
+}
+
+function parameterDetails(
+  node: SyntaxNode,
+  receiverType: string | undefined,
+): C3Parameter[] {
+  return descendantsOfType(node, 'param').map((param, index) => {
+    const label = compactText(param.text);
+    const detail = parameterDetailFromLabel(label, index, receiverType);
+    const name = param.childForFieldName('name')?.text ?? detail.name;
+    const explicitType = param.childForFieldName('type')?.text;
+    const paramDefault = directChildOfType(param, 'param_default');
+    const defaultValue = paramDefault?.childForFieldName('right')?.text;
+    const baseEnd = paramDefault
+      ? paramDefault.startIndex - param.startIndex
+      : param.text.length;
+    const baseText = param.text.slice(0, baseEnd);
+
+    return {
+      ...detail,
+      name,
+      type: explicitType ?? detail.type,
+      optional: !!paramDefault,
+      variadic: /\.\.\./.test(baseText),
+      defaultValue: defaultValue ? compactText(defaultValue) : undefined,
+      receiver: !!receiverType && index === 0,
+    };
+  });
 }
 
 function receiverTypeForCallable(node: SyntaxNode): string | undefined {
@@ -1470,7 +1510,10 @@ function topLevelDeclarationHeaderEndIndex(
   return source.length;
 }
 
-function topLevelDeclarationEndIndex(source: string, startIndex: number): number {
+function topLevelDeclarationEndIndex(
+  source: string,
+  startIndex: number,
+): number {
   const state: LexState = {};
 
   for (let index = startIndex; index < source.length; index++) {

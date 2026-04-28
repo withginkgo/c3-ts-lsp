@@ -181,7 +181,9 @@ test('parseSource extracts nested members, parameters, docs, attrs, and body ran
   const user = parsed.symbols.find((symbol) => symbol.name === 'User');
   const name = user?.children.find((symbol) => symbol.name === 'name');
   const color = parsed.symbols.find((symbol) => symbol.name === 'Color');
-  const errorCode = parsed.symbols.find((symbol) => symbol.name === 'ErrorCode');
+  const errorCode = parsed.symbols.find(
+    (symbol) => symbol.name === 'ErrorCode',
+  );
   const reader = parsed.symbols.find((symbol) => symbol.name === 'Reader');
   const trace = parsed.symbols.find((symbol) => symbol.name === 'trace');
   const add = parsed.symbols.find((symbol) => symbol.name === 'add');
@@ -251,6 +253,63 @@ test('parseSource extracts type methods and gives self the receiver type', () =>
   assert.equal(self?.returnType, 'EventLoop');
 });
 
+test('parseSource extracts callable parameter metadata', () => {
+  const parsed = parseSource(
+    'file:///workspace/app.c3',
+    [
+      'module app;',
+      'fn void connect(String host, int port = 80, String[] ...tags) {}',
+      'fn void EventLoop.init(&self, int count = 1) {}',
+      '',
+    ].join('\n'),
+  );
+  const connect = parsed.symbols.find((symbol) => symbol.name === 'connect');
+  const init = parsed.symbols.find((symbol) => symbol.name === 'init');
+
+  assert.deepEqual(connect?.parameterDetails, [
+    {
+      label: 'String host',
+      name: 'host',
+      type: 'String',
+      optional: false,
+      variadic: false,
+      defaultValue: undefined,
+      receiver: false,
+    },
+    {
+      label: 'int port = 80',
+      name: 'port',
+      type: 'int',
+      optional: true,
+      variadic: false,
+      defaultValue: '80',
+      receiver: false,
+    },
+    {
+      label: 'String[] ...tags',
+      name: 'tags',
+      type: 'String[]',
+      optional: false,
+      variadic: true,
+      defaultValue: undefined,
+      receiver: false,
+    },
+  ]);
+  assert.deepEqual(
+    init?.parameterDetails?.map((parameter) => [
+      parameter.label,
+      parameter.name,
+      parameter.type,
+      parameter.optional,
+      parameter.receiver,
+    ]),
+    [
+      ['&self', 'self', 'EventLoop', false, true],
+      ['int count = 1', 'count', 'int', true, false],
+    ],
+  );
+});
+
 test('parseSource reports tree-sitter syntax diagnostics', () => {
   const parsed = parseSource(
     'file:///workspace/broken.c3',
@@ -307,6 +366,19 @@ test('parseSource recovers top-level callables after parser errors', () => {
       ],
     ],
   );
+  assert.deepEqual(
+    parsed.symbols
+      .find((symbol) => symbol.name === 'printfn')
+      ?.parameterDetails?.map((parameter) => [
+        parameter.label,
+        parameter.name,
+        parameter.variadic,
+      ]),
+    [
+      ['String format', 'format', false],
+      ['args...', 'args', true],
+    ],
+  );
 });
 
 test('parseSource recovers enum declarations after parser errors', () => {
@@ -328,7 +400,10 @@ test('parseSource recovers enum declarations after parser errors', () => {
   );
 
   assert.equal(socketOption?.kind, SymbolKind.Enum);
-  assert.equal(socketOption?.signature, 'enum SocketOption : char (CInt value)');
+  assert.equal(
+    socketOption?.signature,
+    'enum SocketOption : char (CInt value)',
+  );
   assert.deepEqual(
     socketOption?.children.map((symbol) => [
       symbol.name,

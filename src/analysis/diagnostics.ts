@@ -6,7 +6,14 @@ import {
 import type { SyntaxNode } from 'tree-sitter';
 
 import type { ProjectIndex } from '../project/project-index.js';
-import type { ParsedDocument } from '../shared/types.js';
+import { callableParameters, isCallableSymbol } from '../shared/callable.js';
+import {
+  callArguments,
+  callExpressionNodes,
+  callTargetFor,
+  type C3CallArgument,
+} from '../shared/calls.js';
+import type { C3Parameter, C3Symbol, ParsedDocument } from '../shared/types.js';
 
 const diagnosticSource = 'c3-lsp';
 
@@ -26,6 +33,7 @@ export function semanticDiagnostics(
   return [
     ...importDiagnostics,
     ...referenceDiagnostics(index, parsed),
+    ...callDiagnostics(index, parsed),
   ];
 }
 
@@ -72,6 +80,153 @@ function referenceDiagnostics(
   }
 
   return diagnostics;
+}
+
+function callDiagnostics(
+  index: ProjectIndex,
+  parsed: ParsedDocument,
+): Diagnostic[] {
+  const diagnostics: Diagnostic[] = [];
+
+  for (const call of callExpressionNodes(parsed.tree.rootNode)) {
+    const functionNode = call.childForFieldName('function');
+    if (!functionNode) continue;
+
+    const target = callTargetFor(functionNode);
+    if (!target) continue;
+
+    const result = index.resolveSymbol(parsed.uri, target.ref, target.position);
+    const symbol = result.selected;
+    if (!symbol || !isCallableSymbol(symbol)) continue;
+
+    diagnostics.push(
+      ...validateCallArguments(
+        symbol,
+        callableParameters(symbol, { methodStyle: target.methodStyle }),
+        callArguments(call),
+        rangeFromNode(call),
+      ),
+    );
+  }
+
+  return diagnostics;
+}
+
+function validateCallArguments(
+  symbol: C3Symbol,
+  parameters: C3Parameter[],
+  args: C3CallArgument[],
+  callRange: Range,
+): Diagnostic[] {
+  const diagnostics: Diagnostic[] = [];
+  const supplied = new Set<number>();
+  const variadicIndex = parameters.findIndex((parameter) => parameter.variadic);
+  let positionalCursor = 0;
+  let tooManyPositional = false;
+
+  for (const arg of args) {
+    if (arg.name) {
+      const namedIndex = parameters.findIndex(
+        (parameter) => parameter.name === arg.name,
+      );
+
+      if (namedIndex < 0) {
+        diagnostics.push({
+          severity: DiagnosticSeverity.Error,
+          range: arg.nameRange ?? arg.range,
+          message: `Unknown named argument '${arg.name}' for '${symbol.name}'`,
+          source: diagnosticSource,
+        });
+        continue;
+      }
+
+      if (supplied.has(namedIndex)) {
+        diagnostics.push({
+          severity: DiagnosticSeverity.Error,
+          range: arg.nameRange ?? arg.range,
+          message: `Argument '${arg.name}' is already supplied for '${symbol.name}'`,
+          source: diagnosticSource,
+        });
+        continue;
+      }
+
+      supplied.add(namedIndex);
+      continue;
+    }
+
+    const positionalIndex = nextPositionalIndex(
+      parameters,
+      supplied,
+      positionalCursor,
+      variadicIndex,
+    );
+
+    if (variadicIndex >= 0 && positionalIndex >= variadicIndex) {
+      supplied.add(variadicIndex);
+      continue;
+    }
+
+    if (positionalIndex < parameters.length) {
+      supplied.add(positionalIndex);
+      positionalCursor = positionalIndex + 1;
+    } else {
+      tooManyPositional = true;
+    }
+  }
+
+  const missing = parameters.filter(
+    (parameter, index) =>
+      !parameter.optional && !parameter.variadic && !supplied.has(index),
+  );
+
+  for (const parameter of missing) {
+    diagnostics.push({
+      severity: DiagnosticSeverity.Error,
+      range: callRange,
+      message: `Missing required argument '${parameter.name ?? parameter.label}' for '${symbol.name}'`,
+      source: diagnosticSource,
+    });
+  }
+
+  if (variadicIndex < 0 && tooManyPositional) {
+    const expected = argumentRangeLabel(parameters);
+
+    diagnostics.push({
+      severity: DiagnosticSeverity.Error,
+      range: callRange,
+      message: `'${symbol.name}' expects ${expected} argument${expected === '1' ? '' : 's'}, got ${args.length}`,
+      source: diagnosticSource,
+    });
+  }
+
+  return diagnostics;
+}
+
+function nextPositionalIndex(
+  parameters: C3Parameter[],
+  supplied: Set<number>,
+  cursor: number,
+  variadicIndex: number,
+): number {
+  let index = cursor;
+
+  while (index < parameters.length && supplied.has(index)) {
+    index++;
+  }
+
+  if (variadicIndex >= 0 && index >= variadicIndex) return variadicIndex;
+  return index;
+}
+
+function argumentRangeLabel(parameters: C3Parameter[]): string {
+  const min = parameters.filter(
+    (parameter) => !parameter.optional && !parameter.variadic,
+  ).length;
+  const hasVariadic = parameters.some((parameter) => parameter.variadic);
+
+  if (hasVariadic) return `${min}+`;
+  if (min === parameters.length) return String(min);
+  return `${min}-${parameters.length}`;
 }
 
 function pushReferenceDiagnostic(

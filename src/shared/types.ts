@@ -19,8 +19,19 @@ export type C3Symbol = {
   returnType?: string;
   receiverType?: string;
   parameters: string[];
+  parameterDetails?: C3Parameter[];
   scopeRange?: Range;
   children: C3Symbol[];
+};
+
+export type C3Parameter = {
+  label: string;
+  name?: string;
+  type?: string;
+  optional: boolean;
+  variadic: boolean;
+  defaultValue?: string;
+  receiver?: boolean;
 };
 
 export type C3Import = {

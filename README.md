@@ -22,15 +22,18 @@ symbols, code actions, semantic tokens, and inlay hints.
   paths.
 - Scope-aware completions for parameters, locals, chained expression receivers,
   incomplete member access, and struct members.
+- Named argument completions inside function, macro, and method-style calls.
 - Basic expression type analysis for member access, call return values,
   subscript expressions, pointer-like type suffixes, and method-style calls.
 - Syntax and basic semantic diagnostics from tree-sitter parse errors, missing
-  imports, unresolved symbols, and ambiguous symbols.
+  imports, unresolved symbols, ambiguous symbols, and invalid call argument
+  shapes.
 - Optional compiler-backed diagnostics through a configured `c3c` executable.
 - References for declarations, type usages, scoped locals, and resolved member
   accesses.
 - Workspace symbols for project declarations and nested members.
-- Signature help for function and macro calls.
+- Signature help for function, macro, and method-style calls, including default,
+  named, and variadic parameters.
 - Rename with workspace edits across declarations and references.
 - Code actions for missing imports and unresolved import cleanup.
 - Semantic tokens for declaration highlighting.
@@ -59,6 +62,8 @@ src/workspace/scan.ts         Workspace file discovery and indexing
 src/workspace/watch.ts        Workspace file watching and index updates
 src/analysis/diagnostics.ts   Semantic diagnostic generation
 src/shared/types.ts           Shared server data types
+src/shared/callable.ts        Callable and parameter metadata helpers
+src/shared/calls.ts           Call-expression syntax helpers
 src/tools/                    Local debug scripts
 tests/                        Node test runner coverage for parser/index/LSP helpers
 docs/roadmap.md               Implementation plan toward a usable C3 LSP

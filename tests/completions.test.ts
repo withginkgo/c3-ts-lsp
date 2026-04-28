@@ -82,6 +82,68 @@ test('completionItems includes visible scoped symbols', () => {
   assert.equal(labels.includes('count'), true);
 });
 
+test('completionItems suggests named arguments inside function calls', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'fn void connect(String host, int port = 80, String[] ...tags) {}',
+    'fn void use() {',
+    '    connect(host: "example", p',
+    '}',
+    '',
+  ].join('\n');
+  const parsed = parseSource(uri, source);
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+
+  index.upsert(parsed);
+
+  const items = completionItems(
+    index,
+    doc,
+    parsed,
+    doc.positionAt(source.lastIndexOf(' p') + 2),
+  ).filter((item) => item.insertText?.endsWith(': '));
+
+  assert.deepEqual(
+    items.map((item) => [item.label, item.kind, item.detail, item.insertText]),
+    [
+      ['port', CompletionItemKind.Variable, 'int port = 80', 'port: '],
+      ['tags', CompletionItemKind.Variable, 'String[] ...tags', 'tags: '],
+    ],
+  );
+});
+
+test('completionItems suggests method arguments without the receiver', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'struct EventLoop {}',
+    'fn void EventLoop.init(&self, int count = 1) {}',
+    'fn void use(EventLoop loop) {',
+    '    loop.init(c',
+    '}',
+    '',
+  ].join('\n');
+  const parsed = parseSource(uri, source);
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+
+  index.upsert(parsed);
+
+  const items = completionItems(
+    index,
+    doc,
+    parsed,
+    doc.positionAt(source.indexOf('loop.init(c') + 'loop.init(c'.length),
+  ).filter((item) => item.insertText?.endsWith(': '));
+
+  assert.deepEqual(
+    items.map((item) => [item.label, item.kind, item.detail, item.insertText]),
+    [['count', CompletionItemKind.Variable, 'int count = 1', 'count: ']],
+  );
+});
+
 test('completionItems returns struct members after member access', () => {
   const index = new ProjectIndex();
   const uri = 'file:///workspace/app.c3';
@@ -286,7 +348,9 @@ test('completionItems returns members after parenthesized unary receivers', () =
     index,
     doc,
     parsed,
-    doc.positionAt(source.indexOf('(*pointer).inner.') + '(*pointer).inner.'.length),
+    doc.positionAt(
+      source.indexOf('(*pointer).inner.') + '(*pointer).inner.'.length,
+    ),
   );
 
   assert.deepEqual(
@@ -496,7 +560,9 @@ test('completionItems returns stdlib enum constants and inline typedef members',
     index,
     doc,
     parsedApp,
-    doc.positionAt(appSource.indexOf('listener.sock.') + 'listener.sock.'.length),
+    doc.positionAt(
+      appSource.indexOf('listener.sock.') + 'listener.sock.'.length,
+    ),
   );
 
   assert.equal(
@@ -565,7 +631,9 @@ test('completionItems returns constdef constants for partial member access', () 
     index,
     doc,
     parsedApp,
-    doc.positionAt(appSource.indexOf('PollSubscribe.R') + 'PollSubscribe.R'.length),
+    doc.positionAt(
+      appSource.indexOf('PollSubscribe.R') + 'PollSubscribe.R'.length,
+    ),
   );
 
   assert.deepEqual(
@@ -580,7 +648,10 @@ test('completionItems returns constdef constants for partial member access', () 
       ['WRITE', CompletionItemKind.Constant],
     ],
   );
-  assert.equal(items.some((item) => item.label === 'read'), false);
+  assert.equal(
+    items.some((item) => item.label === 'read'),
+    false,
+  );
 });
 
 test('completionItems includes imported symbols and excludes unrelated modules', () => {

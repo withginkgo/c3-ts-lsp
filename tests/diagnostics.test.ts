@@ -149,14 +149,9 @@ test('semanticDiagnostics resolves qualified imported macros recovered from stdl
   );
   const stdlib = parseSource(
     stdlibUri,
-    [
-      'module std::io;',
-      '???',
-      'macro void printn(x = "")',
-      '{',
-      '}',
-      '',
-    ].join('\n'),
+    ['module std::io;', '???', 'macro void printn(x = "")', '{', '}', ''].join(
+      '\n',
+    ),
     { sourceKind: 'stdlib' },
   );
 
@@ -399,7 +394,7 @@ test('semanticDiagnostics accepts recovered stdlib receiver methods on generic s
     [
       'module std::collections::map <Key, Value>;',
       '???',
-      'fn HashMap* HashMap.init(&self, Allocator allocator) {}',
+      'fn HashMap* HashMap.init(&self, Allocator allocator = ...) {}',
       'fn bool HashMap.set(&map, Key key, Value value) @operator([]=) {}',
       '',
     ].join('\n'),
@@ -410,7 +405,7 @@ test('semanticDiagnostics accepts recovered stdlib receiver methods on generic s
     [
       'module std::collections::list <Type>;',
       '???',
-      'fn List* List.init(&self, Allocator allocator) {}',
+      'fn List* List.init(&self, Allocator allocator = ...) {}',
       'fn void List.push(&self, Type element) {}',
       '',
     ].join('\n'),
@@ -447,6 +442,85 @@ test('semanticDiagnostics accepts recovered stdlib receiver methods on generic s
   index.rebuild();
 
   assert.deepEqual(semanticDiagnostics(index, app), []);
+});
+
+test('semanticDiagnostics accepts default, named, and variadic call arguments', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'fn void connect(String host, int port = 80, String[] ...tags) {}',
+      'fn void use() {',
+      '    connect("example");',
+      '    connect(port: 443, host: "example", "debug");',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(semanticDiagnostics(index, parsed), []);
+});
+
+test('semanticDiagnostics reports call argument shape errors', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'fn int add(int left, int right) { return left; }',
+      'fn void connect(String host, int port = 80) {}',
+      'fn void use() {',
+      '    add(1);',
+      '    add(1, 2, 3);',
+      '    connect(port: 443);',
+      '    connect(host: "example", missing: 1);',
+      '    connect("example", host: "duplicate");',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(
+    semanticDiagnostics(index, parsed).map((diagnostic) => diagnostic.message),
+    [
+      "Missing required argument 'right' for 'add'",
+      "'add' expects 2 arguments, got 3",
+      "Missing required argument 'host' for 'connect'",
+      "Unknown named argument 'missing' for 'connect'",
+      "Argument 'host' is already supplied for 'connect'",
+    ],
+  );
+});
+
+test('semanticDiagnostics validates nested call expressions', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'fn int id(int value) { return value; }',
+      'fn int add(int left, int right) { return left; }',
+      'fn void use() {',
+      '    id(add(1));',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(
+    semanticDiagnostics(index, parsed).map((diagnostic) => diagnostic.message),
+    ["Missing required argument 'right' for 'add'"],
+  );
 });
 
 test('semanticDiagnostics reports ambiguous expression symbols', () => {

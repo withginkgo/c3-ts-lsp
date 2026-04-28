@@ -24,15 +24,19 @@ The server currently provides a working prototype:
   visibility, ambiguity, and unresolved-symbol handling.
 - Scope and member-aware hover, definition, completion, diagnostics, and
   references for parameters, locals, and struct fields.
+- Named argument completions inside function, macro, and method-style calls.
 - Lightweight expression type inference for chained members, function call
   return values, subscript receivers, parenthesized expressions, and simple
   pointer-style unary expressions.
 - Default-parameter signatures and ambiguous duplicate symbol handling that
   match C3's non-overloaded function and method model.
+- Callable parameter metadata for default, named, variadic, and method receiver
+  parameters.
 - Member completions while editing incomplete member access such as `res.`.
 - Type usage references for type declarations.
 - Workspace symbols for project declarations and nested members.
-- Signature help for function and macro calls.
+- Signature help for function, macro, and method-style calls, including
+  default, named, and variadic parameters.
 - Rename with workspace edits across declarations and references.
 - Code actions for missing imports and unresolved import cleanup.
 - Semantic tokens for declaration highlighting.
@@ -41,6 +45,8 @@ The server currently provides a working prototype:
 - Semantic diagnostics for unresolved imports, unresolved module aliases,
   unresolved expression symbols, unresolved members, and ambiguous expression
   symbols.
+- Semantic diagnostics for missing required call arguments, too many positional
+  arguments, unknown named arguments, and duplicate supplied arguments.
 - Optional compiler-backed diagnostics through configured `c3c --lsp` output,
   debounced with stale-run protection.
 - Standard library files participate in resolution but do not publish
@@ -51,8 +57,8 @@ The server currently provides a working prototype:
   completion behavior.
 
 The implementation is still intentionally lightweight. It has project/module
-resolution, basic scoped local lookup, simple member type analysis, basic
-default-parameter awareness, and the core daily editing LSP surface. It does not yet
+resolution, basic scoped local lookup, simple member type analysis, callable
+parameter awareness, and the core daily editing LSP surface. It does not yet
 model full C3 type relationships, implicit conversions, broad compiler-backed
 analysis, or editor packaging.
 
@@ -149,7 +155,7 @@ Status: partially completed in Unreleased.
 - Resolve identifiers from inner scope to module/import scope.
 - Track basic type information for declarations and expressions.
 - Support member access, pointer/member dereference, namespace-qualified names,
-  default parameters, and C3's method call syntax.
+  default parameters, named arguments, variadics, and C3's method call syntax.
 
 Exit criteria:
 
@@ -157,6 +163,7 @@ Exit criteria:
   symbols with the same name.
 - Completion can suggest locals, parameters, module symbols, and members based
   on cursor context.
+- Completion can suggest callable parameter names at argument positions.
 - References can be implemented without broad text search.
 
 ### Phase 4: Diagnostics
@@ -183,8 +190,9 @@ Goal: cover the features expected from a daily-use language server.
 
 - Workspace symbols and references. Done for indexed workspace declarations,
   nested members, and resolved references.
-- Signature help for function and macro calls. Done for normal and imported
-  call expressions.
+- Signature help for function and macro calls. Done for normal, imported,
+  method-style, named-argument, default-parameter, and variadic call
+  expressions.
 - Rename with workspace edits. Done for non-stdlib symbols with resolved
   references.
 - Code actions for missing imports and simple quick fixes. Done for missing
@@ -239,6 +247,7 @@ Exit criteria:
 
 1. Split scope, resolver, and type inference out of `project-index.ts` once the
    current behavior stabilizes.
-2. Expand signature help around default, named, and variadic parameters.
-3. Extend type analysis for implicit conversions, enum values, aliases,
+2. Extend type analysis for implicit conversions, enum values, aliases,
    typedefs, and method-style calls.
+3. Add declaration-site diagnostics for duplicate functions/methods and invalid
+   parameter declarations.

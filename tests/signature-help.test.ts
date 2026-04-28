@@ -78,6 +78,43 @@ test('signatureHelp resolves imported macro calls across files', () => {
   );
 });
 
+test('signatureHelp maps named arguments to their declared parameters', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'fn void connect(String host, int port = 80, String[] ...tags) {}',
+    'fn void use() {',
+    '    connect(port: 443, host: "example", "debug");',
+    '}',
+    '',
+  ].join('\n');
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+  const parsed = parseSource(uri, source);
+
+  index.upsert(parsed);
+
+  const namedHelp = signatureHelp(
+    index,
+    doc,
+    parsed,
+    doc.positionAt(source.indexOf('"example"')),
+  );
+  const variadicHelp = signatureHelp(
+    index,
+    doc,
+    parsed,
+    doc.positionAt(source.indexOf('"debug"')),
+  );
+
+  assert.equal(namedHelp?.activeParameter, 0);
+  assert.equal(variadicHelp?.activeParameter, 2);
+  assert.deepEqual(
+    namedHelp?.signatures[0]?.parameters?.map((parameter) => parameter.label),
+    ['String host', 'int port = 80', 'String[] ...tags'],
+  );
+});
+
 test('signatureHelp resolves method-style calls and skips receiver parameters', () => {
   const index = new ProjectIndex();
   const uri = 'file:///workspace/app.c3';
