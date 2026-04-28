@@ -325,6 +325,29 @@ test('parseSource reports tree-sitter syntax diagnostics', () => {
   assert.equal(parsed.diagnostics[0]?.source, 'tree-sitter-c3');
 });
 
+test('parseSource reports a clear missing comma diagnostic in call arguments', () => {
+  const parsed = parseSource(
+    'file:///workspace/app.c3',
+    [
+      'module app;',
+      'fn void use() {',
+      '    listen("0.0.0.0", 7777, 10',
+      '        SocketOption.REUSEADDR, SocketOption.REUSEPORT);',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  assert.equal(
+    parsed.diagnostics[0]?.message,
+    'Syntax error: missing comma between call arguments',
+  );
+  assert.deepEqual(parsed.diagnostics[0]?.range, {
+    start: { line: 2, character: 28 },
+    end: { line: 2, character: 30 },
+  });
+});
+
 test('parseSource recovers top-level callables after parser errors', () => {
   const parsed = parseSource(
     'file:///workspace/std/io.c3',

@@ -1433,9 +1433,7 @@ function collectSyntaxDiagnostics(root: SyntaxNode): Diagnostic[] {
       diagnostics.push({
         severity: DiagnosticSeverity.Error,
         range: nonEmptyRangeFromNode(node),
-        message: node.isMissing
-          ? `Missing ${node.type}`
-          : 'Syntax error: unable to parse this C3 syntax',
+        message: syntaxDiagnosticMessage(node),
         source: 'tree-sitter-c3',
       });
 
@@ -1450,6 +1448,25 @@ function collectSyntaxDiagnostics(root: SyntaxNode): Diagnostic[] {
   visit(root);
 
   return diagnostics;
+}
+
+function syntaxDiagnosticMessage(node: SyntaxNode): string {
+  if (node.isMissing) return `Missing ${node.type}`;
+
+  if (looksLikeMissingCallArgumentComma(node)) {
+    return 'Syntax error: missing comma between call arguments';
+  }
+
+  return 'Syntax error: unable to parse this C3 syntax';
+}
+
+function looksLikeMissingCallArgumentComma(node: SyntaxNode): boolean {
+  return (
+    node.isError &&
+    node.parent?.type === 'call_arg_list' &&
+    !!node.previousNamedSibling &&
+    node.nextNamedSibling?.type === 'call_arg'
+  );
 }
 
 function callableHeaderEndIndex(source: string, startIndex: number): number {

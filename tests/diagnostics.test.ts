@@ -523,6 +523,57 @@ test('semanticDiagnostics validates nested call expressions', () => {
   );
 });
 
+test('semanticDiagnostics reports duplicate function declarations', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'fn int add(int a) { return a; }',
+      'fn int add(int a, int b = 0) { return a; }',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(
+    semanticDiagnostics(index, parsed).map((diagnostic) => diagnostic.message),
+    ["Duplicate function 'add'", "Duplicate function 'add'"],
+  );
+});
+
+test('semanticDiagnostics reports duplicate method declarations across module files', () => {
+  const index = new ProjectIndex();
+  const first = parseSource(
+    'file:///workspace/one.c3',
+    [
+      'module app;',
+      'struct Box {}',
+      'fn void Box.take(&self, int value) {}',
+      '',
+    ].join('\n'),
+  );
+  const second = parseSource(
+    'file:///workspace/two.c3',
+    ['module app;', 'fn void Box.take(&self, float value) {}', ''].join('\n'),
+  );
+
+  index.upsert(first, false);
+  index.upsert(second, false);
+  index.rebuild();
+
+  assert.deepEqual(
+    semanticDiagnostics(index, first).map((diagnostic) => diagnostic.message),
+    ["Duplicate method 'Box.take'"],
+  );
+  assert.deepEqual(
+    semanticDiagnostics(index, second).map((diagnostic) => diagnostic.message),
+    ["Duplicate method 'Box.take'"],
+  );
+});
+
 test('semanticDiagnostics reports ambiguous expression symbols', () => {
   const index = new ProjectIndex();
   const appUri = 'file:///workspace/app.c3';
@@ -584,6 +635,8 @@ test('semanticDiagnostics reports duplicate callable names as ambiguous', () => 
   assert.deepEqual(
     semanticDiagnostics(index, parsed).map((diagnostic) => diagnostic.message),
     [
+      "Duplicate function 'add'",
+      "Duplicate function 'add'",
       "Ambiguous symbol 'add' (2 candidates)",
       "Ambiguous symbol 'add' (2 candidates)",
     ],

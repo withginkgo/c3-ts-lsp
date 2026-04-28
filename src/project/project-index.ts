@@ -40,11 +40,9 @@ export class ProjectIndex {
       .flatMap((parsed) => flattenSymbols(parsed.symbols))
       .filter((symbol) =>
         normalizedQuery
-          ? [
-              symbol.name,
-              symbol.moduleName,
-              symbol.signature,
-            ].some((value) => value.toLowerCase().includes(normalizedQuery))
+          ? [symbol.name, symbol.moduleName, symbol.signature].some((value) =>
+              value.toLowerCase().includes(normalizedQuery),
+            )
           : true,
       )
       .sort(compareSymbols);
@@ -185,9 +183,7 @@ export class ProjectIndex {
       }
     }
 
-    return candidates.sort((a, b) =>
-      a.moduleName.localeCompare(b.moduleName),
-    );
+    return candidates.sort((a, b) => a.moduleName.localeCompare(b.moduleName));
   }
 
   findSymbol(currentUri: string, ref: string): C3Symbol | undefined {
@@ -348,10 +344,7 @@ export class ProjectIndex {
     return resolvedName ? this.modulesByName.get(resolvedName) : undefined;
   }
 
-  moduleChildNamesForPrefix(
-    current: ParsedDocument,
-    prefix: string,
-  ): string[] {
+  moduleChildNamesForPrefix(current: ParsedDocument, prefix: string): string[] {
     const resolvedPrefix =
       this.resolveModuleNameFromPrefix(current, prefix) ?? prefix;
     const childPrefix = `${resolvedPrefix}::`;
@@ -431,7 +424,8 @@ export class ProjectIndex {
         return (
           aliasedModule.allSymbols
             .get(symbolName)
-            ?.filter((symbol) => isVisibleFrom(symbol, current.moduleName)) ?? []
+            ?.filter((symbol) => isVisibleFrom(symbol, current.moduleName)) ??
+          []
         );
       }
     }
@@ -443,9 +437,12 @@ export class ProjectIndex {
         if (lastSegment === modulePrefix) {
           const importedModule = this.resolveImportedModule(current, imp);
           if (importedModule) {
-            const symbols = importedModule.allSymbols
-              .get(symbolName)
-              ?.filter((symbol) => isVisibleFrom(symbol, current.moduleName)) ?? [];
+            const symbols =
+              importedModule.allSymbols
+                .get(symbolName)
+                ?.filter((symbol) =>
+                  isVisibleFrom(symbol, current.moduleName),
+                ) ?? [];
             if (symbols.length > 0) return symbols;
           }
         }
@@ -524,8 +521,16 @@ export class ProjectIndex {
       return (
         resolved?.returnType ??
         symbolTypeName(resolved) ??
-        this.foreachVariableTypeName(current, expression.text, expressionPosition) ??
-        this.varDeclarationTypeName(current, expression.text, expressionPosition) ??
+        this.foreachVariableTypeName(
+          current,
+          expression.text,
+          expressionPosition,
+        ) ??
+        this.varDeclarationTypeName(
+          current,
+          expression.text,
+          expressionPosition,
+        ) ??
         recoverableLocalTypeName(current, expression.text, expressionPosition)
       );
     }
@@ -539,6 +544,19 @@ export class ProjectIndex {
         functionNode,
         rangeFromNode(functionNode).start,
       );
+    }
+
+    if (expression.type === 'elvis_orelse_expr') {
+      const condition = expression.childForFieldName('condition');
+      if (!condition) return undefined;
+
+      const conditionType = this.expressionTypeName(
+        current,
+        condition,
+        rangeFromNode(condition).start,
+      );
+
+      return conditionType ? normalizeTypeName(conditionType) : undefined;
     }
 
     if (expression.type === 'field_expr') {
@@ -564,7 +582,9 @@ export class ProjectIndex {
 
     if (expression.type === 'paren_expr') {
       const inner = expression.namedChildren[0];
-      return inner ? this.expressionTypeName(current, inner, position) : undefined;
+      return inner
+        ? this.expressionTypeName(current, inner, position)
+        : undefined;
     }
 
     if (expression.type === 'unary_expr') {
@@ -635,7 +655,11 @@ export class ProjectIndex {
     const expression = nearestExpressionNode(node);
     if (!expression) return undefined;
 
-    return this.expressionTypeName(current, expression, rangeFromNode(node).start);
+    return this.expressionTypeName(
+      current,
+      expression,
+      rangeFromNode(node).start,
+    );
   }
 
   private baseExpressionTypeNameFromText(
@@ -645,6 +669,16 @@ export class ProjectIndex {
   ): string | undefined {
     const text = stripOuterParens(expressionText.trim());
     if (!text) return undefined;
+
+    const orelse = splitTopLevelOrelseExpression(text);
+    if (orelse) {
+      const conditionType = this.baseExpressionTypeNameFromText(
+        current,
+        orelse.condition,
+        position,
+      );
+      return conditionType ? normalizeTypeName(conditionType) : undefined;
+    }
 
     if (text.startsWith('&')) {
       const innerType = this.baseExpressionTypeNameFromText(
@@ -676,8 +710,8 @@ export class ProjectIndex {
 
     const call = splitCallExpression(text);
     if (call) {
-      return this.resolveSymbol(current.uri, call.functionRef, position).selected
-        ?.returnType;
+      return this.resolveSymbol(current.uri, call.functionRef, position)
+        .selected?.returnType;
     }
 
     if (isReferenceText(text)) {
@@ -777,11 +811,7 @@ export class ProjectIndex {
       const nominalType = nominalTypeName(expandedTypeName);
       if (!nominalType) continue;
 
-      const typeSymbol = this.resolveTypeSymbol(
-        current,
-        nominalType,
-        position,
-      );
+      const typeSymbol = this.resolveTypeSymbol(current, nominalType, position);
 
       symbols.push(
         ...(typeSymbol?.children ?? []),
@@ -1225,7 +1255,9 @@ function nodeAtOrBeforePosition(
   });
 }
 
-function nearestExpressionNode(node: SyntaxNode | null): SyntaxNode | undefined {
+function nearestExpressionNode(
+  node: SyntaxNode | null,
+): SyntaxNode | undefined {
   let current = node;
 
   while (current) {
@@ -1244,6 +1276,7 @@ const expressionNodeTypes = new Set([
   'paren_expr',
   'unary_expr',
   'cast_expr',
+  'elvis_orelse_expr',
 ]);
 
 function parameterTypes(symbol: C3Symbol): string[] {
@@ -1733,6 +1766,58 @@ function splitCallExpression(
         functionRef,
         argsText: text.slice(index + 1, -1),
       };
+    }
+  }
+
+  return undefined;
+}
+
+function splitTopLevelOrelseExpression(
+  text: string,
+): { condition: string; alternative: string } | undefined {
+  let depth = 0;
+  let quote: string | undefined;
+  let escaped = false;
+
+  for (let index = 0; index < text.length - 1; index++) {
+    const char = text[index];
+
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+
+      if (quote !== '`' && char === '\\') {
+        escaped = true;
+        continue;
+      }
+
+      if (char === quote) quote = undefined;
+      continue;
+    }
+
+    if (char === '"' || char === "'" || char === '`') {
+      quote = char;
+      continue;
+    }
+
+    if (char === '(' || char === '[' || char === '{') {
+      depth++;
+      continue;
+    }
+
+    if (char === ')' || char === ']' || char === '}') {
+      depth = Math.max(0, depth - 1);
+      continue;
+    }
+
+    if (depth === 0 && text.slice(index, index + 2) === '??') {
+      const condition = text.slice(0, index).trim();
+      const alternative = text.slice(index + 2).trim();
+      if (!condition || !alternative) return undefined;
+
+      return { condition, alternative };
     }
   }
 

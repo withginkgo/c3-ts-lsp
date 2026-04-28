@@ -1,6 +1,7 @@
 import {
   DiagnosticSeverity,
   Range,
+  SymbolKind,
   type Diagnostic,
 } from 'vscode-languageserver/node.js';
 import type { SyntaxNode } from 'tree-sitter';
@@ -13,6 +14,7 @@ import {
   callTargetFor,
   type C3CallArgument,
 } from '../shared/calls.js';
+import { terminalTypeName } from '../shared/type-ref.js';
 import type { C3Parameter, C3Symbol, ParsedDocument } from '../shared/types.js';
 
 const diagnosticSource = 'c3-lsp';
@@ -32,6 +34,7 @@ export function semanticDiagnostics(
 
   return [
     ...importDiagnostics,
+    ...duplicateCallableDiagnostics(index, parsed),
     ...referenceDiagnostics(index, parsed),
     ...callDiagnostics(index, parsed),
   ];
@@ -80,6 +83,59 @@ function referenceDiagnostics(
   }
 
   return diagnostics;
+}
+
+function duplicateCallableDiagnostics(
+  index: ProjectIndex,
+  parsed: ParsedDocument,
+): Diagnostic[] {
+  const mod = index.getModule(parsed.moduleName);
+  if (!mod) return [];
+
+  const groups = new Map<string, C3Symbol[]>();
+
+  for (const symbol of [...mod.symbols.values()].flat()) {
+    if (!isCallableSymbol(symbol)) continue;
+
+    const key = duplicateCallableKey(symbol);
+    const symbols = groups.get(key) ?? [];
+    symbols.push(symbol);
+    groups.set(key, symbols);
+  }
+
+  const diagnostics: Diagnostic[] = [];
+
+  for (const symbols of groups.values()) {
+    if (symbols.length < 2) continue;
+
+    for (const symbol of symbols) {
+      if (symbol.uri !== parsed.uri) continue;
+
+      diagnostics.push({
+        severity: DiagnosticSeverity.Error,
+        range: symbol.selectionRange,
+        message: duplicateCallableMessage(symbol),
+        source: diagnosticSource,
+      });
+    }
+  }
+
+  return diagnostics.sort((a, b) => compareRanges(a.range, b.range));
+}
+
+function duplicateCallableKey(symbol: C3Symbol): string {
+  return symbol.kind === SymbolKind.Method
+    ? `method:${terminalTypeName(symbol.receiverType ?? '')}:${symbol.name}`
+    : `function:${symbol.name}`;
+}
+
+function duplicateCallableMessage(symbol: C3Symbol): string {
+  if (symbol.kind === SymbolKind.Method) {
+    const receiver = terminalTypeName(symbol.receiverType ?? '') || '<unknown>';
+    return `Duplicate method '${receiver}.${symbol.name}'`;
+  }
+
+  return `Duplicate function '${symbol.name}'`;
 }
 
 function callDiagnostics(
@@ -303,4 +359,15 @@ function rangeFromNode(node: SyntaxNode): Range {
     node.endPosition.row,
     node.endPosition.column,
   );
+}
+
+function compareRanges(a: Range, b: Range): number {
+  return comparePositions(a.start, b.start) || comparePositions(a.end, b.end);
+}
+
+function comparePositions(
+  a: { line: number; character: number },
+  b: { line: number; character: number },
+): number {
+  return a.line - b.line || a.character - b.character;
 }

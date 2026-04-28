@@ -23,11 +23,7 @@ test('inlayHints shows inferred types for var declarations', () => {
 
   index.upsert(parsed);
 
-  const hints = inlayHints(
-    index,
-    parsed,
-    Range.create(0, 0, 6, 0),
-  );
+  const hints = inlayHints(index, parsed, Range.create(0, 0, 6, 0));
 
   assert.deepEqual(
     hints.map((hint) => [hint.position, hint.label, hint.kind]),
@@ -63,6 +59,31 @@ test('inlayHints shows inferred enum constant types', () => {
   );
 });
 
+test('inlayHints unwraps elvis orelse expression types', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'struct TcpServerSocket {}',
+    'fn TcpServerSocket listen() {}',
+    'fn void unreachable(String message) {}',
+    'fn void use() {',
+    '    var listener @safeinfer = listen() ?? unreachable("listen failed");',
+    '}',
+    '',
+  ].join('\n');
+  const parsed = parseSource(uri, source);
+
+  index.upsert(parsed);
+
+  const hints = inlayHints(index, parsed, Range.create(0, 0, 8, 0));
+
+  assert.deepEqual(
+    hints.map((hint) => [hint.position, hint.label, hint.kind]),
+    [[{ line: 5, character: 16 }, ': TcpServerSocket', 1]],
+  );
+});
+
 test('inlayHints skips unsafe var declarations in normal functions', () => {
   const index = new ProjectIndex();
   const uri = 'file:///workspace/app.c3';
@@ -77,8 +98,5 @@ test('inlayHints skips unsafe var declarations in normal functions', () => {
 
   index.upsert(parsed);
 
-  assert.deepEqual(
-    inlayHints(index, parsed, Range.create(0, 0, 5, 0)),
-    [],
-  );
+  assert.deepEqual(inlayHints(index, parsed, Range.create(0, 0, 5, 0)), []);
 });

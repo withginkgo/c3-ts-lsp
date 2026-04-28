@@ -28,6 +28,8 @@ The server currently provides a working prototype:
 - Lightweight expression type inference for chained members, function call
   return values, subscript receivers, parenthesized expressions, and simple
   pointer-style unary expressions.
+- Type inference for `??` orelse expressions used by common unwrap/fallback
+  flows.
 - Default-parameter signatures and ambiguous duplicate symbol handling that
   match C3's non-overloaded function and method model.
 - Callable parameter metadata for default, named, variadic, and method receiver
@@ -47,6 +49,8 @@ The server currently provides a working prototype:
   symbols.
 - Semantic diagnostics for missing required call arguments, too many positional
   arguments, unknown named arguments, and duplicate supplied arguments.
+- Declaration-side diagnostics for duplicate function and type method
+  declarations.
 - Optional compiler-backed diagnostics through configured `c3c --lsp` output,
   debounced with stale-run protection.
 - Standard library files participate in resolution but do not publish
@@ -249,5 +253,4 @@ Exit criteria:
    current behavior stabilizes.
 2. Extend type analysis for implicit conversions, enum values, aliases,
    typedefs, and method-style calls.
-3. Add declaration-site diagnostics for duplicate functions/methods and invalid
-   parameter declarations.
+3. Add declaration-site diagnostics for invalid parameter declarations.

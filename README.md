@@ -24,10 +24,12 @@ symbols, code actions, semantic tokens, and inlay hints.
   incomplete member access, and struct members.
 - Named argument completions inside function, macro, and method-style calls.
 - Basic expression type analysis for member access, call return values,
-  subscript expressions, pointer-like type suffixes, and method-style calls.
+  subscript expressions, pointer-like type suffixes, `??` orelse expressions,
+  and method-style calls.
 - Syntax and basic semantic diagnostics from tree-sitter parse errors, missing
   imports, unresolved symbols, ambiguous symbols, and invalid call argument
   shapes.
+- Declaration-side diagnostics for duplicate functions and type methods.
 - Optional compiler-backed diagnostics through a configured `c3c` executable.
 - References for declarations, type usages, scoped locals, and resolved member
   accesses.
