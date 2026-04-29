@@ -172,7 +172,13 @@ export class ProjectIndex {
     const candidates: Array<{ moduleName: string; symbol: C3Symbol }> = [];
 
     for (const mod of this.modulesByName.values()) {
-      if (mod.name === current.moduleName || imported.has(mod.name)) continue;
+      if (
+        !mod.name ||
+        mod.name === current.moduleName ||
+        imported.has(mod.name)
+      ) {
+        continue;
+      }
 
       const visible = (mod.symbols.get(ref) ?? []).find((symbol) =>
         isVisibleFrom(symbol, current.moduleName),
@@ -184,6 +190,33 @@ export class ProjectIndex {
     }
 
     return candidates.sort((a, b) => a.moduleName.localeCompare(b.moduleName));
+  }
+
+  autoImportCandidates(
+    current: ParsedDocument,
+  ): Array<{ moduleName: string; symbol: C3Symbol }> {
+    const imported = this.importedModuleNameSet(current);
+    const candidates: Array<{ moduleName: string; symbol: C3Symbol }> = [];
+
+    for (const mod of this.modulesByName.values()) {
+      if (
+        !mod.name ||
+        mod.name === current.moduleName ||
+        imported.has(mod.name)
+      ) {
+        continue;
+      }
+
+      for (const symbols of mod.symbols.values()) {
+        for (const symbol of symbols) {
+          if (!isVisibleFrom(symbol, current.moduleName)) continue;
+
+          candidates.push({ moduleName: mod.name, symbol });
+        }
+      }
+    }
+
+    return candidates.sort(compareAutoImportCandidates);
   }
 
   findSymbol(currentUri: string, ref: string): C3Symbol | undefined {
@@ -358,6 +391,105 @@ export class ProjectIndex {
     }
 
     return [...childNames].sort((a, b) => a.localeCompare(b));
+  }
+
+  modulePathCandidates(
+    current: ParsedDocument,
+    pathPrefix: string,
+  ): Array<{ label: string; moduleName: string }> {
+    const path = pathPrefix.trim();
+    const parts = path.length > 0 ? path.split('::') : [];
+    const segmentPrefix = parts.pop() ?? '';
+    const parentPath = parts.join('::');
+    const candidates = new Map<string, { label: string; moduleName: string }>();
+
+    if (parentPath.length === 0) {
+      for (const moduleName of this.modulesByName.keys()) {
+        const label = moduleName.split('::')[0];
+
+        if (label.startsWith(segmentPrefix)) {
+          candidates.set(`absolute:${label}`, {
+            label,
+            moduleName: label,
+          });
+        }
+      }
+
+      for (const candidate of this.relativeModulePathCandidates(
+        current,
+        '',
+        segmentPrefix,
+      )) {
+        candidates.set(
+          `relative:${candidate.label}:${candidate.moduleName}`,
+          candidate,
+        );
+      }
+
+      return [...candidates.values()].sort(compareModulePathCandidates);
+    }
+
+    const parentNames = new Set<string>([parentPath]);
+    const resolvedParent = this.resolveImportFromModule(
+      current.moduleName,
+      parentPath,
+    );
+
+    if (resolvedParent) {
+      parentNames.add(resolvedParent.name);
+    }
+
+    if (current.moduleName) {
+      parentNames.add(`${current.moduleName}::${parentPath}`);
+    }
+
+    for (const parentName of parentNames) {
+      for (const moduleName of this.modulesByName.keys()) {
+        if (!moduleName.startsWith(`${parentName}::`)) {
+          continue;
+        }
+
+        const remainder = moduleName
+          .slice(parentName.length + 2)
+          .split('::')[0];
+        if (!remainder || !remainder.startsWith(segmentPrefix)) continue;
+
+        const completedModuleName = `${parentName}::${remainder}`;
+        candidates.set(`${remainder}:${completedModuleName}`, {
+          label: remainder,
+          moduleName: completedModuleName,
+        });
+      }
+    }
+
+    return [...candidates.values()].sort(compareModulePathCandidates);
+  }
+
+  private relativeModulePathCandidates(
+    current: ParsedDocument,
+    parentPath: string,
+    segmentPrefix: string,
+  ): Array<{ label: string; moduleName: string }> {
+    if (!current.moduleName) return [];
+
+    const prefix = parentPath
+      ? `${current.moduleName}::${parentPath}::`
+      : `${current.moduleName}::`;
+    const candidates = new Map<string, { label: string; moduleName: string }>();
+
+    for (const moduleName of this.modulesByName.keys()) {
+      if (!moduleName.startsWith(prefix)) continue;
+
+      const label = moduleName.slice(prefix.length).split('::')[0];
+      if (!label || !label.startsWith(segmentPrefix)) continue;
+
+      candidates.set(`${label}:${moduleName}`, {
+        label,
+        moduleName: `${prefix}${label}`,
+      });
+    }
+
+    return [...candidates.values()];
   }
 
   private resolveModuleNameFromPrefix(
@@ -812,10 +944,18 @@ export class ProjectIndex {
       if (!nominalType) continue;
 
       const typeSymbol = this.resolveTypeSymbol(current, nominalType, position);
-
-      symbols.push(
+      const concreteMembers = [
         ...(typeSymbol?.children ?? []),
         ...this.methodSymbolsForTypeName(current, expandedTypeName, typeSymbol),
+      ];
+
+      symbols.push(
+        ...concreteMembers,
+        ...this.interfaceMemberSymbolsForType(
+          current,
+          typeSymbol,
+          concreteMembers,
+        ),
       );
     }
 
@@ -869,6 +1009,71 @@ export class ProjectIndex {
           receiverTypeMatches(symbol.receiverType, typeName, typeSymbol),
       ),
     ).sort(compareSymbols);
+  }
+
+  private interfaceMemberSymbolsForType(
+    current: ParsedDocument,
+    typeSymbol: C3Symbol | undefined,
+    concreteMembers: C3Symbol[],
+  ): C3Symbol[] {
+    if (!typeSymbol?.implementedInterfaces?.length) return [];
+
+    const shadowedNames = new Set(concreteMembers.map((member) => member.name));
+    const members: C3Symbol[] = [];
+
+    for (const interfaceSymbol of this.implementedInterfaceSymbolsForType(
+      current,
+      typeSymbol,
+    )) {
+      for (const member of interfaceSymbol.children) {
+        if (shadowedNames.has(member.name)) continue;
+
+        shadowedNames.add(member.name);
+        members.push(member);
+      }
+    }
+
+    return members;
+  }
+
+  private implementedInterfaceSymbolsForType(
+    current: ParsedDocument,
+    typeSymbol: C3Symbol,
+    seen = new Set<string>(),
+  ): C3Symbol[] {
+    const owner = this.parsedByUri.get(typeSymbol.uri) ?? current;
+    const interfaces: C3Symbol[] = [];
+
+    for (const interfaceName of typeSymbol.implementedInterfaces ?? []) {
+      const interfaceSymbol = this.resolveTypeSymbol(
+        owner,
+        interfaceName,
+        typeSymbol.selectionRange.start,
+      );
+
+      if (!interfaceSymbol || interfaceSymbol.kind !== SymbolKind.Interface) {
+        continue;
+      }
+
+      const key = [
+        interfaceSymbol.uri,
+        interfaceSymbol.selectionRange.start.line,
+        interfaceSymbol.selectionRange.start.character,
+      ].join(':');
+      if (seen.has(key)) continue;
+
+      seen.add(key);
+      interfaces.push(interfaceSymbol);
+      interfaces.push(
+        ...this.implementedInterfaceSymbolsForType(
+          owner,
+          interfaceSymbol,
+          seen,
+        ),
+      );
+    }
+
+    return interfaces;
   }
 
   private resolveTypeSymbol(
@@ -992,13 +1197,13 @@ export class ProjectIndex {
   private rebuildAffectedModules(
     ...moduleNames: Array<string | undefined>
   ): void {
-    for (const moduleName of new Set(moduleNames.filter(Boolean))) {
+    for (const moduleName of new Set(moduleNames)) {
       this.rebuildModule(moduleName);
     }
   }
 
   private rebuildModule(moduleName: string | undefined): void {
-    if (!moduleName) return;
+    if (moduleName == null) return;
 
     this.modulesByName.delete(moduleName);
 
@@ -1010,8 +1215,6 @@ export class ProjectIndex {
   }
 
   private addParsedToModule(parsed: ParsedDocument): void {
-    if (!parsed.moduleName) return;
-
     let mod = this.modulesByName.get(parsed.moduleName);
 
     if (!mod) {
@@ -1377,6 +1580,26 @@ function methodShapeKey(symbol: C3Symbol): string {
     normalizeTypeName(symbol.returnType ?? ''),
     parameterTypes(symbol).map(normalizeTypeName).join(','),
   ].join('|');
+}
+
+function compareModulePathCandidates(
+  a: { label: string; moduleName: string },
+  b: { label: string; moduleName: string },
+): number {
+  return (
+    a.label.localeCompare(b.label) || a.moduleName.localeCompare(b.moduleName)
+  );
+}
+
+function compareAutoImportCandidates(
+  a: { moduleName: string; symbol: C3Symbol },
+  b: { moduleName: string; symbol: C3Symbol },
+): number {
+  return (
+    a.symbol.name.localeCompare(b.symbol.name) ||
+    a.moduleName.localeCompare(b.moduleName) ||
+    compareSymbols(a.symbol, b.symbol)
+  );
 }
 
 function compareSymbols(a: C3Symbol, b: C3Symbol): number {

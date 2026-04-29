@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { CompletionItemKind } from 'vscode-languageserver/node.js';
+import {
+  CompletionItemKind,
+  InsertTextFormat,
+} from 'vscode-languageserver/node.js';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 
 import { completionItems } from '../src/lsp/completions.js';
@@ -144,6 +147,251 @@ test('completionItems suggests method arguments without the receiver', () => {
   );
 });
 
+test('completionItems only suggests attributes after @', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'attrdef @Route(String path);',
+    'struct DynamicArenaAllocator {}',
+    'fn void use() @',
+    '',
+  ].join('\n');
+  const parsed = parseSource(uri, source);
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+
+  index.upsert(parsed);
+
+  const items = completionItems(
+    index,
+    doc,
+    parsed,
+    doc.positionAt(source.lastIndexOf('@') + '@'.length),
+  );
+
+  assert.equal(
+    items.every((item) => item.label.startsWith('@')),
+    true,
+  );
+  assert.equal(
+    items.find((item) => item.label === '@dynamic')?.kind,
+    CompletionItemKind.Property,
+  );
+  assert.equal(
+    items.find((item) => item.label === '@Route')?.kind,
+    CompletionItemKind.Property,
+  );
+  assert.equal(
+    items.some((item) => item.label === 'DynamicArenaAllocator'),
+    false,
+  );
+});
+
+test('completionItems filters attributes after a typed @ prefix', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'attrdef @Route(String path);',
+    'fn void use() @dyna',
+    '',
+  ].join('\n');
+  const parsed = parseSource(uri, source);
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+
+  index.upsert(parsed);
+
+  const position = doc.positionAt(source.indexOf('@dyna') + '@dyna'.length);
+  const items = completionItems(index, doc, parsed, position);
+
+  assert.deepEqual(
+    items.map((item) => item.label),
+    ['@dynamic'],
+  );
+  assert.deepEqual(items[0]?.textEdit, {
+    range: {
+      start: doc.positionAt(source.indexOf('@dyna') + '@'.length),
+      end: position,
+    },
+    newText: 'dynamic',
+  });
+});
+
+test('completionItems suggests implemented interface methods in type method declarations', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'interface MyName {',
+    '    fn String myname();',
+    '}',
+    'struct Baz(MyName) {',
+    '    int x;',
+    '}',
+    'fn String Baz.',
+  ].join('\n');
+  const parsed = parseSource(uri, source);
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+
+  index.upsert(parsed);
+
+  const items = completionItems(
+    index,
+    doc,
+    parsed,
+    doc.positionAt(source.length),
+  );
+
+  assert.deepEqual(
+    items.map((item) => [item.label, item.kind, item.detail]),
+    [['myname', CompletionItemKind.Method, 'String myname()']],
+  );
+});
+
+test('completionItems suggests interface methods in module-less type method declarations', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'interface MyName{',
+    '    fn String myname();',
+    '}',
+    '',
+    'struct Baz(MyName){',
+    '    int x;',
+    '}',
+    '',
+    'fn String Baz.',
+    '',
+    'fn void run_reactor(){',
+    '    TcpServerSocket listener=tcp::listen("0.0.0.0",7777,10,',
+    '        net::SocketOption.REUSEADDR,net::SocketOption.REUSEPORT)',
+    '        ?? unreachable("listen failed");',
+    '',
+    '    (void)listener.set_option(net::SocketOption.REUSEADDR,true);',
+    '    (void)listener.sock.set_non_blocking(true);',
+    '',
+    '    Poll[MAX_CLIENTS] poll_fds;',
+    '',
+    '}',
+  ].join('\n');
+  const parsed = parseSource(uri, source);
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+
+  index.upsert(parsed);
+
+  const items = completionItems(
+    index,
+    doc,
+    parsed,
+    doc.positionAt(source.indexOf('fn String Baz.') + 'fn String Baz.'.length),
+  );
+
+  assert.deepEqual(
+    items.map((item) => [item.label, item.kind, item.detail]),
+    [['myname', CompletionItemKind.Method, 'String myname()']],
+  );
+});
+
+test('completionItems treats return-type method declarations as method declarations', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'interface MyName {',
+    '    fn String myname();',
+    '}',
+    'struct Baz(MyName) {',
+    '    int x;',
+    '}',
+    'fn void run_reactor() {}',
+    'String Baz.',
+  ].join('\n');
+  const parsed = parseSource(uri, source);
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+
+  index.upsert(parsed);
+
+  const items = completionItems(
+    index,
+    doc,
+    parsed,
+    doc.positionAt(source.length),
+  );
+
+  assert.deepEqual(
+    items.map((item) => [item.label, item.kind, item.detail]),
+    [['myname', CompletionItemKind.Method, 'String myname()']],
+  );
+});
+
+test('completionItems does not mix globals into type method declarations while editing an existing method', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'interface MyName {',
+    '    fn String myname();',
+    '}',
+    'struct Baz(MyName) {',
+    '    int x;',
+    '}',
+    'fn void run_reactor() {}',
+    'fn String Baz.myname() @dynamic {',
+    '    return "i am baz!";',
+    '}',
+    '',
+  ].join('\n');
+  const parsed = parseSource(uri, source);
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+
+  index.upsert(parsed);
+
+  const items = completionItems(
+    index,
+    doc,
+    parsed,
+    doc.positionAt(source.indexOf('Baz.') + 'Baz.'.length),
+  );
+
+  assert.equal(
+    items.some((item) => item.label === 'myname'),
+    true,
+  );
+  assert.equal(
+    items.some((item) => item.label === 'run_reactor'),
+    false,
+  );
+});
+
+test('completionItems suppresses global symbols after unmatched dot access', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'fn void run_reactor() {}',
+    'fn void use() {',
+    '    value. ',
+    '}',
+    '',
+  ].join('\n');
+  const parsed = parseSource(uri, source);
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+
+  index.upsert(parsed);
+
+  const items = completionItems(
+    index,
+    doc,
+    parsed,
+    doc.positionAt(source.indexOf('value. ') + 'value. '.length),
+  );
+
+  assert.equal(
+    items.some((item) => item.label === 'run_reactor'),
+    false,
+  );
+});
+
 test('completionItems returns struct members after member access', () => {
   const index = new ProjectIndex();
   const uri = 'file:///workspace/app.c3';
@@ -173,6 +421,50 @@ test('completionItems returns struct members after member access', () => {
   assert.deepEqual(
     items.map((item) => [item.label, item.kind, item.detail]),
     [['body', CompletionItemKind.Field, 'String body;']],
+  );
+});
+
+test('completionItems inserts parens for method call completions', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'struct EventLoop {}',
+    'fn void EventLoop.init(&self) {}',
+    'fn void use(EventLoop loop) {',
+    '    loop.',
+    '}',
+    '',
+  ].join('\n');
+  const parsed = parseSource(uri, source);
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+
+  index.upsert(parsed);
+
+  const items = completionItems(
+    index,
+    doc,
+    parsed,
+    doc.positionAt(source.indexOf('loop.') + 'loop.'.length),
+  );
+
+  assert.deepEqual(
+    items.map((item) => [
+      item.label,
+      item.kind,
+      item.detail,
+      item.insertText,
+      item.insertTextFormat,
+    ]),
+    [
+      [
+        'init',
+        CompletionItemKind.Method,
+        'void EventLoop.init(&self)',
+        'init($0)',
+        InsertTextFormat.Snippet,
+      ],
+    ],
   );
 });
 
@@ -475,6 +767,118 @@ test('completionItems returns child modules after a module namespace prefix', ()
   );
 });
 
+test('completionItems completes partial module paths in imports', () => {
+  const index = new ProjectIndex();
+  const appUri = 'file:///workspace/app.c3';
+  const appSource = ['module app;', 'import std::n', ''].join('\n');
+  const parsedApp = parseSource(appUri, appSource);
+  const doc = TextDocument.create(appUri, 'c3', 1, appSource);
+
+  index.upsert(parsedApp, false);
+  index.upsert(
+    parseSource('file:///stdlib/std/net.c3', 'module std::net;\n', {
+      sourceKind: 'stdlib',
+    }),
+    false,
+  );
+  index.upsert(
+    parseSource('file:///stdlib/std/io.c3', 'module std::io;\n', {
+      sourceKind: 'stdlib',
+    }),
+    false,
+  );
+  index.rebuild();
+
+  const position = doc.positionAt(
+    appSource.indexOf('std::n') + 'std::n'.length,
+  );
+  const items = completionItems(index, doc, parsedApp, position);
+
+  assert.deepEqual(
+    items.map((item) => [item.label, item.kind, item.detail, item.textEdit]),
+    [
+      [
+        'net',
+        CompletionItemKind.Module,
+        'module std::net',
+        {
+          range: {
+            start: doc.positionAt(appSource.indexOf('std::n') + 'std::'.length),
+            end: position,
+          },
+          newText: 'net',
+        },
+      ],
+    ],
+  );
+});
+
+test('completionItems completes module paths in alias module targets', () => {
+  const index = new ProjectIndex();
+  const appUri = 'file:///workspace/app.c3';
+  const appSource = ['module app;', 'alias net = module std::n', ''].join('\n');
+  const parsedApp = parseSource(appUri, appSource);
+  const doc = TextDocument.create(appUri, 'c3', 1, appSource);
+
+  index.upsert(parsedApp, false);
+  index.upsert(
+    parseSource('file:///stdlib/std/net.c3', 'module std::net;\n', {
+      sourceKind: 'stdlib',
+    }),
+    false,
+  );
+  index.rebuild();
+
+  const position = doc.positionAt(
+    appSource.indexOf('std::n') + 'std::n'.length,
+  );
+  const items = completionItems(index, doc, parsedApp, position);
+
+  assert.deepEqual(
+    items.map((item) => [item.label, item.kind, item.detail]),
+    [['net', CompletionItemKind.Module, 'module std::net']],
+  );
+});
+
+test('completionItems suggests relative child modules in imports', () => {
+  const index = new ProjectIndex();
+  const appUri = 'file:///workspace/app.c3';
+  const appSource = ['module app;', 'import ', ''].join('\n');
+  const parsedApp = parseSource(appUri, appSource);
+  const doc = TextDocument.create(appUri, 'c3', 1, appSource);
+
+  index.upsert(parsedApp, false);
+  index.upsert(
+    parseSource('file:///workspace/net.c3', 'module app::net;\n', {
+      sourceKind: 'workspace',
+    }),
+    false,
+  );
+  index.upsert(
+    parseSource('file:///stdlib/std/io.c3', 'module std::io;\n', {
+      sourceKind: 'stdlib',
+    }),
+    false,
+  );
+  index.rebuild();
+
+  const items = completionItems(
+    index,
+    doc,
+    parsedApp,
+    doc.positionAt(appSource.indexOf('import ') + 'import '.length),
+  );
+
+  assert.deepEqual(
+    items.map((item) => [item.label, item.kind, item.detail]),
+    [
+      ['app', CompletionItemKind.Module, 'module app'],
+      ['net', CompletionItemKind.Module, 'module app::net'],
+      ['std', CompletionItemKind.Module, 'module std'],
+    ],
+  );
+});
+
 test('completionItems returns stdlib enum constants and inline typedef members', () => {
   const index = new ProjectIndex();
   const appUri = 'file:///workspace/app.c3';
@@ -654,7 +1058,7 @@ test('completionItems returns constdef constants for partial member access', () 
   );
 });
 
-test('completionItems includes imported symbols and excludes unrelated modules', () => {
+test('completionItems includes visible symbols and auto-imports unrelated modules', () => {
   const index = new ProjectIndex();
   const appUri = 'file:///workspace/app.c3';
   const netUri = 'file:///workspace/lib/net.c3';
@@ -677,16 +1081,33 @@ test('completionItems includes imported symbols and excludes unrelated modules',
   index.upsert(parseSource(otherUri, otherSource), false);
   index.rebuild();
 
-  const labels = completionItems(
+  const items = completionItems(
     index,
     doc,
     parsedApp,
     doc.positionAt(appSource.length),
-  ).map((item) => item.label);
+  );
 
-  assert.equal(labels.includes('local'), true);
-  assert.equal(labels.includes('connect'), true);
-  assert.equal(labels.includes('unrelated'), false);
+  assert.equal(
+    items.find((item) => item.label === 'local')?.detail,
+    'void local()',
+  );
+  assert.equal(
+    items.find((item) => item.label === 'connect')?.detail,
+    'void connect()',
+  );
+  assert.deepEqual(
+    items.find((item) => item.label === 'unrelated')?.additionalTextEdits,
+    [
+      {
+        range: {
+          start: { line: 1, character: 0 },
+          end: { line: 1, character: 0 },
+        },
+        newText: 'import other;\n',
+      },
+    ],
+  );
 });
 
 test('completionItems includes relative imported symbols', () => {
@@ -737,4 +1158,99 @@ test('completionItems excludes private imported symbols', () => {
   ).map((item) => item.label);
 
   assert.equal(labels.includes('hidden'), false);
+});
+
+test('completionItems suggests auto imports for unimported public symbols', () => {
+  const index = new ProjectIndex();
+  const appUri = 'file:///workspace/app.c3';
+  const netUri = 'file:///workspace/lib/net.c3';
+  const appSource = ['module app;', 'fn void use() {', '    con', '}', ''].join(
+    '\n',
+  );
+  const netSource = ['module lib::net;', 'fn void connect() {}', ''].join('\n');
+  const parsedApp = parseSource(appUri, appSource);
+  const doc = TextDocument.create(appUri, 'c3', 1, appSource);
+
+  index.upsert(parsedApp, false);
+  index.upsert(parseSource(netUri, netSource), false);
+  index.rebuild();
+
+  const item = completionItems(
+    index,
+    doc,
+    parsedApp,
+    doc.positionAt(appSource.indexOf('con') + 'con'.length),
+  ).find((candidate) => candidate.label === 'connect');
+
+  assert.equal(item?.kind, CompletionItemKind.Function);
+  assert.equal(item?.detail, 'void connect() (auto import lib::net)');
+  assert.deepEqual(item?.additionalTextEdits, [
+    {
+      range: {
+        start: { line: 1, character: 0 },
+        end: { line: 1, character: 0 },
+      },
+      newText: 'import lib::net;\n',
+    },
+  ]);
+});
+
+test('completionItems does not auto import private symbols', () => {
+  const index = new ProjectIndex();
+  const appUri = 'file:///workspace/app.c3';
+  const netUri = 'file:///workspace/lib/net.c3';
+  const appSource = ['module app;', 'fn void use() {', '    hid', '}', ''].join(
+    '\n',
+  );
+  const netSource = [
+    'module lib::net;',
+    'fn void hidden() @private {}',
+    '',
+  ].join('\n');
+  const parsedApp = parseSource(appUri, appSource);
+  const doc = TextDocument.create(appUri, 'c3', 1, appSource);
+
+  index.upsert(parsedApp, false);
+  index.upsert(parseSource(netUri, netSource), false);
+  index.rebuild();
+
+  const labels = completionItems(
+    index,
+    doc,
+    parsedApp,
+    doc.positionAt(appSource.indexOf('hid') + 'hid'.length),
+  ).map((item) => item.label);
+
+  assert.equal(labels.includes('hidden'), false);
+});
+
+test('completionItems does not add import edits for visible symbols', () => {
+  const index = new ProjectIndex();
+  const appUri = 'file:///workspace/app.c3';
+  const netUri = 'file:///workspace/lib/net.c3';
+  const appSource = [
+    'module app;',
+    'import lib::net;',
+    'fn void use() {',
+    '    con',
+    '}',
+    '',
+  ].join('\n');
+  const netSource = ['module lib::net;', 'fn void connect() {}', ''].join('\n');
+  const parsedApp = parseSource(appUri, appSource);
+  const doc = TextDocument.create(appUri, 'c3', 1, appSource);
+
+  index.upsert(parsedApp, false);
+  index.upsert(parseSource(netUri, netSource), false);
+  index.rebuild();
+
+  const connectItems = completionItems(
+    index,
+    doc,
+    parsedApp,
+    doc.positionAt(appSource.indexOf('con') + 'con'.length),
+  ).filter((item) => item.label === 'connect');
+
+  assert.equal(connectItems.length, 1);
+  assert.equal(connectItems[0]?.additionalTextEdits, undefined);
 });

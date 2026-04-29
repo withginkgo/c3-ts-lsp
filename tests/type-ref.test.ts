@@ -25,7 +25,10 @@ test('type helpers preserve generic identity for member and element lookup', () 
     'std::collections::HashMap',
   );
   assert.equal(collectionElementTypeName('List{Poll}'), 'Poll');
-  assert.equal(collectionElementTypeName('HashMap{NativeSocket, Handlers}'), 'Handlers');
+  assert.equal(
+    collectionElementTypeName('HashMap{NativeSocket, Handlers}'),
+    'Handlers',
+  );
   assert.equal(collectionElementTypeName('Poll[]'), 'Poll');
   assert.equal(normalizeTypeName('const List { Poll } *'), 'List{Poll}');
 });

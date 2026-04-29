@@ -18,7 +18,9 @@ export function callableParameters(
       parameterDetailFromLabel(parameter, index, symbol.receiverType),
     );
 
-  return options.methodStyle && symbol.kind === SymbolKind.Method
+  return options.methodStyle &&
+    symbol.kind === SymbolKind.Method &&
+    !!symbol.receiverType
     ? parameters.slice(1)
     : parameters;
 }

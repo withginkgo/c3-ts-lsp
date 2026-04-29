@@ -1,7 +1,6 @@
 import {
   CodeAction,
   CodeActionKind,
-  Position,
   Range,
   TextEdit,
   type CodeActionParams,
@@ -10,6 +9,7 @@ import {
 
 import type { ProjectIndex } from '../project/project-index.js';
 import type { ParsedDocument } from '../shared/types.js';
+import { importTextEdit } from './import-edits.js';
 
 export function codeActions(
   index: ProjectIndex,
@@ -43,9 +43,7 @@ function missingImportActions(
         `Import ${moduleName}`,
         {
           changes: {
-            [current.uri]: [
-              TextEdit.insert(importInsertPosition(current), `import ${moduleName};\n`),
-            ],
+            [current.uri]: [importTextEdit(current, moduleName)],
           },
         },
         CodeActionKind.QuickFix,
@@ -75,13 +73,6 @@ function unresolvedImportActions(
 
   action.diagnostics = [diagnostic];
   return [action];
-}
-
-function importInsertPosition(current: ParsedDocument): Position {
-  const lines = current.source.split('\n');
-  const moduleLine = lines.findIndex((line) => line.trim().startsWith('module '));
-
-  return Position.create(moduleLine >= 0 ? moduleLine + 1 : 0, 0);
 }
 
 function fullLineRange(source: string, line: number): Range {

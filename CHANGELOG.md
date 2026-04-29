@@ -37,6 +37,14 @@ All notable project changes are recorded here.
 - Added semantic tokens for declaration-oriented highlighting.
 - Added inlay type hints for simple inferred `var` declarations.
 - Added optional document formatting through a configured external formatter.
+- Added import and module-alias path completions for indexed workspace,
+  dependency, and standard-library modules.
+- Added auto-import completions for unimported public symbols, with
+  `additionalTextEdits` inserting the required import.
+- Added architecture documentation for module boundaries, dependency direction,
+  and the next refactor priorities.
+- Added npm format scripts and a Prettier ignore file for generated or local
+  workspace artifacts.
 
 ### Changed
 
@@ -65,6 +73,10 @@ All notable project changes are recorded here.
 - Made type-method lookup follow imported module dependencies when resolving
   receiver methods such as `NativeSocket.set_non_blocking` exposed through
   `std::net`.
+- Renamed the package from the template placeholder to `c3-ts-lsp`.
+- Split server capability declarations and environment/path resolution out of
+  the LSP entrypoint.
+- Split completion cursor/context parsing out of completion item generation.
 
 ### Fixed
 

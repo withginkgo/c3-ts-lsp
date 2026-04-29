@@ -34,6 +34,16 @@ test('ProjectIndex groups files from the same module', () => {
   );
 });
 
+test('ProjectIndex indexes module-less current files', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/scratch.c3';
+
+  index.upsert(parseSource(uri, 'fn void scratch() {}\n'));
+
+  assert.equal(index.moduleCount(), 1);
+  assert.equal(index.findSymbol(uri, 'scratch')?.signature, 'void scratch()');
+});
+
 test('ProjectIndex resolves symbols from files in the same module', () => {
   const index = new ProjectIndex();
   const mainUri = pathToFileURL('testdata/simple/main.c3').toString();
@@ -543,6 +553,72 @@ test('ProjectIndex resolves self members and type methods', () => {
   assert.equal(method.reason, 'resolved');
   assert.equal(method.selected?.kind, SymbolKind.Method);
   assert.equal(method.selected?.signature, 'void EventLoop.init(&self)');
+});
+
+test('ProjectIndex exposes interface methods on implementing struct types', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'interface MyName {',
+    '    fn String myname();',
+    '}',
+    'struct Baz(MyName) {',
+    '    int x;',
+    '}',
+    'fn void use(Baz baz) {',
+    '    baz.myname();',
+    '}',
+    '',
+  ].join('\n');
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+
+  index.upsert(parseSource(uri, source));
+
+  const result = index.resolveSymbol(
+    uri,
+    'myname',
+    doc.positionAt(source.indexOf('myname();')),
+  );
+
+  assert.equal(result.reason, 'resolved');
+  assert.equal(result.selected?.kind, SymbolKind.Method);
+  assert.equal(result.selected?.signature, 'String myname()');
+});
+
+test('ProjectIndex prefers concrete methods over implemented interface methods', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'interface MyName {',
+    '    fn String myname();',
+    '}',
+    'struct Baz(MyName) {',
+    '}',
+    'fn String Baz.myname(Baz* self) @dynamic {',
+    '    return "i am baz!";',
+    '}',
+    'fn void use(Baz baz) {',
+    '    baz.myname();',
+    '}',
+    '',
+  ].join('\n');
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+
+  index.upsert(parseSource(uri, source));
+
+  const result = index.resolveSymbol(
+    uri,
+    'myname',
+    doc.positionAt(source.lastIndexOf('myname();')),
+  );
+
+  assert.equal(result.reason, 'resolved');
+  assert.equal(
+    result.selected?.signature,
+    'String Baz.myname(Baz* self) @dynamic',
+  );
 });
 
 test('ProjectIndex resolves methods through generic field receiver types', () => {

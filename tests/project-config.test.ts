@@ -93,8 +93,14 @@ test('resolveC3ProjectModel expands target sources, tests, and c3l dependencies'
     assert.deepEqual(relativePaths(root, model?.dependencyFiles ?? []), [
       'lib/math.c3l/api/math.c3i',
     ]);
-    assert.equal(matchesProjectSource(model!, path.join(root, 'src/new.c3')), true);
-    assert.equal(matchesProjectSource(model!, path.join(root, 'docs/readme.c3')), false);
+    assert.equal(
+      matchesProjectSource(model!, path.join(root, 'src/new.c3')),
+      true,
+    );
+    assert.equal(
+      matchesProjectSource(model!, path.join(root, 'docs/readme.c3')),
+      false,
+    );
 
     const toolModel = resolveC3ProjectModel(root, { targetName: 'tool' });
 
@@ -130,5 +136,7 @@ function writeJsonc(root: string, relativePath: string, source: string): void {
 }
 
 function relativePaths(root: string, files: string[]): string[] {
-  return files.map((file) => path.relative(root, file).split(path.sep).join('/'));
+  return files.map((file) =>
+    path.relative(root, file).split(path.sep).join('/'),
+  );
 }

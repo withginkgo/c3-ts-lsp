@@ -33,7 +33,8 @@ export function semanticTokens(parsed: ParsedDocument): SemanticTokens {
     builder.push(
       symbol.selectionRange.start.line,
       symbol.selectionRange.start.character,
-      symbol.selectionRange.end.character - symbol.selectionRange.start.character,
+      symbol.selectionRange.end.character -
+        symbol.selectionRange.start.character,
       type,
       tokenModifiersForSymbol(symbol),
     );
@@ -106,7 +107,8 @@ function tokenTypeNameForSymbol(symbol: C3Symbol): string {
 }
 
 function tokenModifiersForSymbol(symbol: C3Symbol): number {
-  let modifiers = 1 << semanticTokenLegend.tokenModifiers.indexOf('declaration');
+  let modifiers =
+    1 << semanticTokenLegend.tokenModifiers.indexOf('declaration');
 
   if (symbol.kind === SymbolKind.Constant) {
     modifiers |= 1 << semanticTokenLegend.tokenModifiers.indexOf('readonly');

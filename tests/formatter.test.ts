@@ -19,7 +19,12 @@ test('resolveFormatterCommand accepts initialization option arrays', () => {
 });
 
 test('formatEdits returns a full document edit for formatted text', () => {
-  const doc = TextDocument.create('file:///workspace/app.c3', 'c3', 1, 'module app;\n');
+  const doc = TextDocument.create(
+    'file:///workspace/app.c3',
+    'c3',
+    1,
+    'module app;\n',
+  );
   const edits = formatEdits(doc, 'MODULE APP;\n');
 
   assert.deepEqual(edits, [

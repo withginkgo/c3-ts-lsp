@@ -6,7 +6,9 @@ export type C3TypeRef = {
   arguments: C3TypeRef[];
 };
 
-export function parseTypeRef(typeName: string | undefined): C3TypeRef | undefined {
+export function parseTypeRef(
+  typeName: string | undefined,
+): C3TypeRef | undefined {
   if (!typeName) return undefined;
 
   const normalized = normalizeTypeName(typeName);

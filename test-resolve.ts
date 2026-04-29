@@ -26,4 +26,7 @@ index.upsert(stdDoc);
 
 console.log('imports:', helloDoc.imports);
 
-console.log('resolving:', index.resolveSymbol('hello.c3', 'io::printn', { line: 5, character: 10 }));
+console.log(
+  'resolving:',
+  index.resolveSymbol('hello.c3', 'io::printn', { line: 5, character: 10 }),
+);

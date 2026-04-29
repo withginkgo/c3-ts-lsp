@@ -2,11 +2,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import {
-  Position,
-  Range,
-  TextEdit,
-} from 'vscode-languageserver/node.js';
+import { Position, Range, TextEdit } from 'vscode-languageserver/node.js';
 import type { TextDocument } from 'vscode-languageserver-textdocument';
 
 export type FormatterCommand = {
@@ -18,10 +14,12 @@ export function resolveFormatterCommand(
   options: unknown,
   env: NodeJS.ProcessEnv = process.env,
 ): FormatterCommand | null {
-  const configured = configuredFormatter(options) ?? env.C3_FORMATTER ?? env.C3FMT;
+  const configured =
+    configuredFormatter(options) ?? env.C3_FORMATTER ?? env.C3FMT;
   if (configured) return normalizeFormatterCommand(configured);
 
-  const discovered = findExecutable('c3fmt', env) ?? findExecutable('c3-format', env);
+  const discovered =
+    findExecutable('c3fmt', env) ?? findExecutable('c3-format', env);
   return discovered ? { command: discovered, args: [] } : null;
 }
 
@@ -65,12 +63,17 @@ function configuredFormatter(options: unknown): unknown {
   );
 }
 
-function normalizeFormatterCommand(configured: unknown): FormatterCommand | null {
+function normalizeFormatterCommand(
+  configured: unknown,
+): FormatterCommand | null {
   if (typeof configured === 'string' && configured.trim()) {
     return { command: configured.trim(), args: [] };
   }
 
-  if (Array.isArray(configured) && configured.every((part) => typeof part === 'string')) {
+  if (
+    Array.isArray(configured) &&
+    configured.every((part) => typeof part === 'string')
+  ) {
     const [command, ...args] = configured;
     return command ? { command, args } : null;
   }
@@ -82,7 +85,8 @@ function normalizeFormatterCommand(configured: unknown): FormatterCommand | null
 
     if (
       typeof command === 'string' &&
-      (!args || (Array.isArray(args) && args.every((arg) => typeof arg === 'string')))
+      (!args ||
+        (Array.isArray(args) && args.every((arg) => typeof arg === 'string')))
     ) {
       return {
         command,

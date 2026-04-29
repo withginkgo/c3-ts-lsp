@@ -19,11 +19,7 @@ test('renameSymbol edits declarations and qualified references across files', ()
     '}',
     '',
   ].join('\n');
-  const netSource = [
-    'module lib::net;',
-    'fn void connect() {}',
-    '',
-  ].join('\n');
+  const netSource = ['module lib::net;', 'fn void connect() {}', ''].join('\n');
   const doc = TextDocument.create(appUri, 'c3', 1, appSource);
   const app = parseSource(appUri, appSource);
 
@@ -89,9 +85,13 @@ test('prepareRename rejects stdlib symbols', () => {
 
   index.upsert(app, false);
   index.upsert(
-    parseSource(stdlibUri, 'module std::io;\nfn void print(String value) {}\n', {
-      sourceKind: 'stdlib',
-    }),
+    parseSource(
+      stdlibUri,
+      'module std::io;\nfn void print(String value) {}\n',
+      {
+        sourceKind: 'stdlib',
+      },
+    ),
     false,
   );
   index.rebuild();

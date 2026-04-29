@@ -13,7 +13,13 @@ test('workspaceSymbols returns matching symbols across workspace files', () => {
   index.upsert(
     parseSource(
       'file:///workspace/app.c3',
-      ['module app;', 'struct HttpResponse {', '    String body;', '}', ''].join('\n'),
+      [
+        'module app;',
+        'struct HttpResponse {',
+        '    String body;',
+        '}',
+        '',
+      ].join('\n'),
     ),
     false,
   );
@@ -60,7 +66,13 @@ test('workspaceSymbols includes nested members when queried directly', () => {
   index.upsert(
     parseSource(
       'file:///workspace/app.c3',
-      ['module app;', 'struct HttpResponse {', '    String body;', '}', ''].join('\n'),
+      [
+        'module app;',
+        'struct HttpResponse {',
+        '    String body;',
+        '}',
+        '',
+      ].join('\n'),
     ),
   );
 

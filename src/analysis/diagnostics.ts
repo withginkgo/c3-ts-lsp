@@ -14,7 +14,7 @@ import {
   callTargetFor,
   type C3CallArgument,
 } from '../shared/calls.js';
-import { terminalTypeName } from '../shared/type-ref.js';
+import { terminalTypeName, typeNamesCompatible } from '../shared/type-ref.js';
 import type { C3Parameter, C3Symbol, ParsedDocument } from '../shared/types.js';
 
 const diagnosticSource = 'c3-lsp';
@@ -35,9 +35,53 @@ export function semanticDiagnostics(
   return [
     ...importDiagnostics,
     ...duplicateCallableDiagnostics(index, parsed),
+    ...methodReceiverDiagnostics(parsed),
     ...referenceDiagnostics(index, parsed),
     ...callDiagnostics(index, parsed),
   ];
+}
+
+function methodReceiverDiagnostics(parsed: ParsedDocument): Diagnostic[] {
+  const diagnostics: Diagnostic[] = [];
+
+  for (const symbol of flattenSymbols(parsed.symbols)) {
+    if (symbol.kind !== SymbolKind.Method || !symbol.receiverType) continue;
+
+    const receiver = firstCallableParameter(symbol);
+    if (receiver && typeNamesCompatible(receiver.type, symbol.receiverType)) {
+      continue;
+    }
+
+    diagnostics.push({
+      severity: DiagnosticSeverity.Error,
+      range: symbol.selectionRange,
+      message: methodReceiverMessage(symbol),
+      source: diagnosticSource,
+    });
+  }
+
+  return diagnostics.sort((a, b) => compareRanges(a.range, b.range));
+}
+
+function firstCallableParameter(symbol: C3Symbol): C3Parameter | undefined {
+  return (
+    symbol.parameterDetails?.[0] ??
+    (symbol.parameters[0]
+      ? {
+          label: symbol.parameters[0],
+          type: undefined,
+          optional: false,
+          variadic: false,
+        }
+      : undefined)
+  );
+}
+
+function methodReceiverMessage(symbol: C3Symbol): string {
+  const receiver = terminalTypeName(symbol.receiverType ?? '') || '<receiver>';
+  const returnType = symbol.returnType ?? 'void';
+
+  return `A method must start with an argument of the type it is a method of, e.g. 'fn ${returnType} ${receiver}.${symbol.name}(${receiver}* self)'`;
 }
 
 function unresolvedImportDiagnostics(
@@ -350,6 +394,13 @@ function memberReferenceNodes(root: SyntaxNode): SyntaxNode[] {
 
   visit(root);
   return refs;
+}
+
+function flattenSymbols(symbols: C3Symbol[]): C3Symbol[] {
+  return symbols.flatMap((symbol) => [
+    symbol,
+    ...flattenSymbols(symbol.children),
+  ]);
 }
 
 function rangeFromNode(node: SyntaxNode): Range {

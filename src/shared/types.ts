@@ -18,6 +18,7 @@ export type C3Symbol = {
   attributes: string[];
   returnType?: string;
   receiverType?: string;
+  implementedInterfaces?: string[];
   parameters: string[];
   parameterDetails?: C3Parameter[];
   scopeRange?: Range;

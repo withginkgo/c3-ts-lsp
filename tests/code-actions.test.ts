@@ -11,13 +11,7 @@ test('codeActions suggests imports for unresolved symbols', () => {
   const appUri = 'file:///workspace/app.c3';
   const app = parseSource(
     appUri,
-    [
-      'module app;',
-      'fn void use() {',
-      '    connect();',
-      '}',
-      '',
-    ].join('\n'),
+    ['module app;', 'fn void use() {', '    connect();', '}', ''].join('\n'),
   );
 
   index.upsert(app, false);

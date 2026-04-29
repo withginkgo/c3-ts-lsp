@@ -55,7 +55,8 @@ export function resolveC3ProjectModel(
   const targets = objectValue(project.targets);
   const targetNames = targets ? Object.keys(targets) : [];
   const targetName = selectTargetName(targetNames, options.targetName);
-  const target = targetName && targets ? objectValue(targets[targetName]) : null;
+  const target =
+    targetName && targets ? objectValue(targets[targetName]) : null;
   const includeTests = options.includeTests ?? true;
 
   const sourcePatterns = mergeStringList(project, target, sourceKeys);
@@ -165,7 +166,7 @@ function mergeStringList(
 
   return [
     ...(stringListValue(global[keys.append]) ?? []),
-    ...(target ? stringListValue(target[keys.append]) ?? [] : []),
+    ...(target ? (stringListValue(target[keys.append]) ?? []) : []),
   ];
 }
 
@@ -174,7 +175,9 @@ function stringListValue(value: unknown): string[] | undefined {
 
   if (!Array.isArray(value)) return undefined;
 
-  const result = value.filter((item): item is string => typeof item === 'string');
+  const result = value.filter(
+    (item): item is string => typeof item === 'string',
+  );
   return result.length > 0 || value.length === 0 ? result : undefined;
 }
 
@@ -205,7 +208,8 @@ function collectFilesForPattern(root: string, rawPattern: string): string[] {
   const literalPath = resolveProjectPath(root, normalized);
 
   if (!hasGlob(normalized)) {
-    if (isFile(literalPath) && isC3SourceFile(literalPath)) return [literalPath];
+    if (isFile(literalPath) && isC3SourceFile(literalPath))
+      return [literalPath];
     if (isDirectory(literalPath)) return collectC3Files(literalPath);
     return [];
   }
@@ -236,7 +240,9 @@ function matchesAnyProjectPattern(
       return literalPath === filePath || isPathInside(filePath, literalPath);
     }
 
-    return globPatternRegex(normalized).test(relativeProjectPath(root, filePath));
+    return globPatternRegex(normalized).test(
+      relativeProjectPath(root, filePath),
+    );
   });
 }
 
@@ -271,7 +277,10 @@ function resolveDependencyRoots(
   return [...roots].sort(comparePaths);
 }
 
-function candidateDependencyRoots(searchPath: string, dependency: string): string[] {
+function candidateDependencyRoots(
+  searchPath: string,
+  dependency: string,
+): string[] {
   return [
     path.join(searchPath, dependency),
     path.join(searchPath, `${dependency}.c3l`),
@@ -287,7 +296,9 @@ function collectDependencyFiles(dependencyRoots: string[]): string[] {
       ? manifestSourcePatterns(manifestFile)
       : [];
     const dependencyFiles =
-      patterns.length > 0 ? collectFilesForPatterns(root, patterns) : collectC3Files(root);
+      patterns.length > 0
+        ? collectFilesForPatterns(root, patterns)
+        : collectC3Files(root);
 
     for (const file of dependencyFiles) files.add(file);
   }

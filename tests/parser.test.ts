@@ -253,6 +253,27 @@ test('parseSource extracts type methods and gives self the receiver type', () =>
   assert.equal(self?.returnType, 'EventLoop');
 });
 
+test('parseSource extracts implemented interfaces from aggregate declarations', () => {
+  const parsed = parseSource(
+    'file:///workspace/app.c3',
+    [
+      'module app;',
+      'interface MyName {',
+      '    fn String myname();',
+      '}',
+      'struct Baz(MyName) {',
+      '    int x;',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  const baz = parsed.symbols.find((symbol) => symbol.name === 'Baz');
+
+  assert.deepEqual(baz?.implementedInterfaces, ['MyName']);
+  assert.equal(baz?.signature, 'struct Baz(MyName)');
+});
+
 test('parseSource extracts callable parameter metadata', () => {
   const parsed = parseSource(
     'file:///workspace/app.c3',
@@ -316,13 +337,17 @@ test('parseSource reports tree-sitter syntax diagnostics', () => {
     ['module broken;', 'fn void nope( {', ''].join('\n'),
   );
 
-  assert.equal(parsed.diagnostics.length, 1);
-  assert.equal(parsed.diagnostics[0]?.severity, 1);
-  assert.equal(
-    parsed.diagnostics[0]?.message,
-    'Syntax error: unable to parse this C3 syntax',
+  assert.deepEqual(
+    parsed.diagnostics.map((diagnostic) => [
+      diagnostic.severity,
+      diagnostic.message,
+      diagnostic.source,
+    ]),
+    [
+      [1, "Missing '}'", 'c3-lsp'],
+      [1, "Missing ')'", 'c3-lsp'],
+    ],
   );
-  assert.equal(parsed.diagnostics[0]?.source, 'tree-sitter-c3');
 });
 
 test('parseSource reports a clear missing comma diagnostic in call arguments', () => {
@@ -495,6 +520,39 @@ test('parseSource recovers type methods after parser errors', () => {
   );
 });
 
+test('parseSource does not merge an incomplete method declaration with the next function', () => {
+  const parsed = parseSource(
+    'file:///workspace/app.c3',
+    [
+      'interface MyName{',
+      '    fn String myname();',
+      '}',
+      '',
+      'struct Baz(MyName){',
+      '    int x;',
+      '}',
+      '',
+      'fn String Baz.',
+      '',
+      'fn void run_reactor(){',
+      '    TcpServerSocket listener=tcp::listen("0.0.0.0",7777,10,',
+      '        net::SocketOption.REUSEADDR,net::SocketOption.REUSEPORT)',
+      '        ?? unreachable("listen failed");',
+      '',
+      '    Poll[MAX_CLIENTS] poll_fds;',
+      '}',
+    ].join('\n'),
+  );
+
+  const runReactor = parsed.symbols.find(
+    (symbol) => symbol.name === 'run_reactor',
+  );
+
+  assert.equal(runReactor?.kind, SymbolKind.Function);
+  assert.equal(runReactor?.receiverType, undefined);
+  assert.equal(runReactor?.signature, 'fn void run_reactor()');
+});
+
 test('parseSource extracts var declarations as scoped symbols', () => {
   const parsed = parseSource(
     'file:///workspace/app.c3',
@@ -556,5 +614,56 @@ test('parseSource skips unsafe var declarations in normal functions', () => {
   assert.equal(
     parsed.scopedSymbols.some((symbol) => symbol.name === 'name'),
     false,
+  );
+});
+
+test('parseSource reports missing closing delimiters with focused syntax diagnostics', () => {
+  const parsed = parseSource(
+    'file:///workspace/app.c3',
+    ['module app;', 'fn void use() {', '    connect(1, 2;', '}', ''].join('\n'),
+  );
+
+  assert.deepEqual(
+    parsed.diagnostics.map((diagnostic) => [
+      diagnostic.message,
+      diagnostic.source,
+      diagnostic.range.start.line,
+      diagnostic.range.start.character,
+    ]),
+    [["Missing ')' before '}'", 'c3-lsp', 3, 0]],
+  );
+});
+
+test('parseSource reports unterminated blocks with syntax diagnostics', () => {
+  const parsed = parseSource(
+    'file:///workspace/app.c3',
+    ['module app;', 'fn void use() {', '    int x;', ''].join('\n'),
+  );
+
+  assert.deepEqual(
+    parsed.diagnostics.map((diagnostic) => [
+      diagnostic.message,
+      diagnostic.source,
+      diagnostic.range.start.line,
+      diagnostic.range.start.character,
+    ]),
+    [["Missing '}'", 'c3-lsp', 1, 14]],
+  );
+});
+
+test('parseSource reports missing semicolons in top-level directives', () => {
+  const parsed = parseSource(
+    'file:///workspace/app.c3',
+    ['module app;', 'import std::io', 'fn void use() {}', ''].join('\n'),
+  );
+
+  assert.deepEqual(
+    parsed.diagnostics.map((diagnostic) => [
+      diagnostic.message,
+      diagnostic.source,
+      diagnostic.range.start.line,
+      diagnostic.range.start.character,
+    ]),
+    [["Missing ';'", 'c3-lsp', 1, 14]],
   );
 });

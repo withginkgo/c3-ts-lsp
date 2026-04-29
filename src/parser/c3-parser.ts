@@ -45,7 +45,7 @@ export function parseSource(
       ])
     : parsedSymbols;
   const scopedSymbols = extractScopedSymbols(doc, tree.rootNode, moduleName);
-  const diagnostics = collectSyntaxDiagnostics(tree.rootNode);
+  const diagnostics = collectSyntaxDiagnostics(doc, tree.rootNode);
 
   return {
     uri,
@@ -366,6 +366,7 @@ function aggregateSymbol(
   return createSymbol(doc, node, nameNode, moduleName, kind, {
     bodyNode: node.childForFieldName('body') ?? undefined,
     children,
+    implementedInterfaces: implementedInterfacesFor(node),
     signature: declarationSignature(node),
   });
 }
@@ -397,6 +398,8 @@ function functionSymbol(
   rangeNode = node,
 ): C3Symbol | null {
   const header = directChildOfType(node, 'func_header');
+  if (header?.hasError) return null;
+
   const nameNode = header?.childForFieldName('name') ?? extractNameNode(node);
   if (!nameNode) return null;
 
@@ -420,6 +423,8 @@ function macroSymbol(
   moduleName: string,
 ): C3Symbol | null {
   const header = directChildOfType(node, 'macro_header');
+  if (header?.hasError) return null;
+
   const nameNode = header?.childForFieldName('name') ?? extractNameNode(node);
   if (!nameNode) return null;
 
@@ -911,6 +916,7 @@ function recoverAggregateSymbol(
     signature: compactText(header),
     documentation: undefined,
     attributes: attributesFromText(header),
+    implementedInterfaces: implementedInterfacesFromAggregateHeader(header),
     parameters: [],
     children,
   };
@@ -1005,6 +1011,7 @@ function recoverTypeAliasSymbol(
     documentation: undefined,
     attributes: attributesFromText(declaration),
     returnType: match.groups.target.trim(),
+    implementedInterfaces: [],
     parameters: [],
     children: [],
   };
@@ -1045,6 +1052,8 @@ function recoverCallableSymbol(
   if (!prefix || paramsStart < 0) return null;
 
   const beforeParams = header.slice(prefix.length, paramsStart).trim();
+  if (containsNestedCallableStart(beforeParams)) return null;
+
   const fullName = beforeParams.split(/\s+/).at(-1);
   if (!fullName) return null;
 
@@ -1078,6 +1087,7 @@ function recoverCallableSymbol(
     attributes: attributesFromText(header),
     returnType: beforeParams.slice(0, -fullName.length).trim() || undefined,
     receiverType,
+    implementedInterfaces: [],
     parameters: parameterTexts,
     parameterDetails: parameterTexts.map((parameter, index) =>
       parameterDetailFromLabel(parameter, index, receiverType),
@@ -1091,6 +1101,10 @@ function recoverCallableSymbol(
       receiverType,
     ),
   };
+}
+
+function containsNestedCallableStart(text: string): boolean {
+  return /(^|\n)\s*(?:extern\s+)?(?:fn|macro)\s+/.test(text);
 }
 
 function recoveredParameterSymbols(
@@ -1132,6 +1146,7 @@ function recoveredParameterSymbols(
       documentation: undefined,
       attributes: [],
       returnType: info.type,
+      implementedInterfaces: [],
       parameters: [],
       children: [],
     });
@@ -1214,6 +1229,7 @@ function createSymbol(
     attributes?: string[];
     returnType?: string;
     receiverType?: string;
+    implementedInterfaces?: string[];
     parameters?: string[];
     parameterDetails?: C3Parameter[];
     scopeRange?: Range;
@@ -1232,6 +1248,7 @@ function createSymbol(
     attributes: options.attributes ?? attributesFor(node),
     returnType: options.returnType,
     receiverType: options.receiverType,
+    implementedInterfaces: options.implementedInterfaces,
     parameters: options.parameters ?? [],
     parameterDetails: options.parameterDetails,
     scopeRange: options.scopeRange,
@@ -1423,19 +1440,48 @@ function attributesFromText(text: string): string[] {
   return text.match(/@[A-Za-z_][A-Za-z0-9_]*/g) ?? [];
 }
 
-function collectSyntaxDiagnostics(root: SyntaxNode): Diagnostic[] {
-  const diagnostics: Diagnostic[] = [];
+function implementedInterfacesFor(node: SyntaxNode): string[] {
+  const implList = directChildOfType(node, 'interface_impl_list');
+  if (!implList) return [];
+
+  return directChildrenOfType(implList, 'path_type_ident').map(
+    (interfaceNode) => interfaceNode.text,
+  );
+}
+
+function implementedInterfacesFromAggregateHeader(header: string): string[] {
+  const match = header.match(
+    /^(?:struct|union|enum|constdef)\s+[A-Za-z_$@][A-Za-z0-9_$@]*\s*\((?<interfaces>[^)]*)\)/,
+  );
+  if (!match?.groups?.interfaces) return [];
+
+  return splitTopLevelParameters(match.groups.interfaces)
+    .map((name) => name.trim())
+    .filter(Boolean);
+}
+
+function collectSyntaxDiagnostics(
+  doc: TextDocument,
+  root: SyntaxNode,
+): Diagnostic[] {
+  const sourceDiagnostics = [
+    ...collectDelimiterDiagnostics(doc),
+    ...collectMissingTerminatorDiagnostics(doc),
+  ];
+  const diagnostics: Diagnostic[] = [...sourceDiagnostics];
 
   function visit(node: SyntaxNode): void {
     if (!node.hasError && !node.isError && !node.isMissing) return;
 
     if (node.isError || node.isMissing) {
-      diagnostics.push({
-        severity: DiagnosticSeverity.Error,
-        range: nonEmptyRangeFromNode(node),
-        message: syntaxDiagnosticMessage(node),
-        source: 'tree-sitter-c3',
-      });
+      if (!shouldSuppressErrorNodeDiagnostic(node, sourceDiagnostics)) {
+        diagnostics.push({
+          severity: DiagnosticSeverity.Error,
+          range: nonEmptyRangeFromNode(node),
+          message: syntaxDiagnosticMessage(node),
+          source: 'tree-sitter-c3',
+        });
+      }
 
       if (node.isError) return;
     }
@@ -1447,11 +1493,11 @@ function collectSyntaxDiagnostics(root: SyntaxNode): Diagnostic[] {
 
   visit(root);
 
-  return diagnostics;
+  return uniqueDiagnostics(diagnostics);
 }
 
 function syntaxDiagnosticMessage(node: SyntaxNode): string {
-  if (node.isMissing) return `Missing ${node.type}`;
+  if (node.isMissing) return `Missing ${printableSyntaxNodeType(node.type)}`;
 
   if (looksLikeMissingCallArgumentComma(node)) {
     return 'Syntax error: missing comma between call arguments';
@@ -1467,6 +1513,231 @@ function looksLikeMissingCallArgumentComma(node: SyntaxNode): boolean {
     !!node.previousNamedSibling &&
     node.nextNamedSibling?.type === 'call_arg'
   );
+}
+
+type OpenDelimiter = {
+  char: string;
+  index: number;
+};
+
+function collectDelimiterDiagnostics(doc: TextDocument): Diagnostic[] {
+  const source = doc.getText();
+  const diagnostics: Diagnostic[] = [];
+  const stack: OpenDelimiter[] = [];
+  const state: LexState = {};
+
+  for (let index = 0; index < source.length; index++) {
+    const char = source[index];
+
+    if (updateLexState(source, index, state)) continue;
+    if (state.lineComment || state.blockComment || state.stringQuote) continue;
+
+    if (isOpeningDelimiter(char)) {
+      stack.push({ char, index });
+      continue;
+    }
+
+    if (!isClosingDelimiter(char)) continue;
+
+    while (
+      stack.length > 0 &&
+      closingDelimiterFor(stack[stack.length - 1]!.char) !== char
+    ) {
+      const open = stack.pop()!;
+
+      diagnostics.push(
+        syntaxDiagnostic(
+          rangeFromOffsets(doc, index, index + 1),
+          `Missing ${printableSyntaxNodeType(
+            closingDelimiterFor(open.char),
+          )} before ${printableSyntaxNodeType(char)}`,
+          'c3-lsp',
+        ),
+      );
+    }
+
+    if (stack.length > 0) {
+      stack.pop();
+      continue;
+    }
+
+    diagnostics.push(
+      syntaxDiagnostic(
+        rangeFromOffsets(doc, index, index + 1),
+        `Unexpected ${printableSyntaxNodeType(char)}`,
+        'c3-lsp',
+      ),
+    );
+  }
+
+  for (const open of stack.reverse()) {
+    diagnostics.push(
+      syntaxDiagnostic(
+        rangeFromOffsets(doc, open.index, open.index + 1),
+        `Missing ${printableSyntaxNodeType(closingDelimiterFor(open.char))}`,
+        'c3-lsp',
+      ),
+    );
+  }
+
+  return diagnostics;
+}
+
+function collectMissingTerminatorDiagnostics(doc: TextDocument): Diagnostic[] {
+  const source = doc.getText();
+  const diagnostics: Diagnostic[] = [];
+  let lineStart = 0;
+
+  for (let index = 0; index <= source.length; index++) {
+    if (index < source.length && source[index] !== '\n') continue;
+
+    const line = source.slice(lineStart, index);
+    const codeLength = codeLengthBeforeLineComment(line);
+    const code = line.slice(0, codeLength).trimEnd();
+
+    if (needsSemicolonTerminator(code)) {
+      const end = lineStart + code.length;
+
+      diagnostics.push(
+        syntaxDiagnostic(
+          rangeFromOffsets(doc, end, end + 1),
+          "Missing ';'",
+          'c3-lsp',
+        ),
+      );
+    }
+
+    lineStart = index + 1;
+  }
+
+  return diagnostics;
+}
+
+function needsSemicolonTerminator(line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed) return false;
+  if (/[;{,}]$/.test(trimmed)) return false;
+
+  return /^\s*(?:module|import|alias|typedef|attrdef)\b/.test(line);
+}
+
+function codeLengthBeforeLineComment(line: string): number {
+  const state: Pick<LexState, 'stringQuote' | 'escaped'> = {};
+
+  for (let index = 0; index < line.length; index++) {
+    const char = line[index];
+    const next = line[index + 1];
+
+    if (state.stringQuote) {
+      if (state.escaped) {
+        state.escaped = false;
+        continue;
+      }
+
+      if (state.stringQuote !== '`' && char === '\\') {
+        state.escaped = true;
+        continue;
+      }
+
+      if (char === state.stringQuote) state.stringQuote = undefined;
+      continue;
+    }
+
+    if (char === '"' || char === "'" || char === '`') {
+      state.stringQuote = char;
+      continue;
+    }
+
+    if (char === '/' && next === '/') return index;
+  }
+
+  return line.length;
+}
+
+function shouldSuppressErrorNodeDiagnostic(
+  node: SyntaxNode,
+  sourceDiagnostics: Diagnostic[],
+): boolean {
+  if (!node.isError) return false;
+
+  const range = rangeFromNode(node);
+
+  return sourceDiagnostics.some((diagnostic) =>
+    rangeContainsPosition(range, diagnostic.range.start),
+  );
+}
+
+function syntaxDiagnostic(
+  range: Range,
+  message: string,
+  source: string,
+): Diagnostic {
+  return {
+    severity: DiagnosticSeverity.Error,
+    range,
+    message,
+    source,
+  };
+}
+
+function isOpeningDelimiter(char: string): boolean {
+  return char === '(' || char === '[' || char === '{';
+}
+
+function isClosingDelimiter(char: string): boolean {
+  return char === ')' || char === ']' || char === '}';
+}
+
+function closingDelimiterFor(char: string): string {
+  switch (char) {
+    case '(':
+      return ')';
+    case '[':
+      return ']';
+    case '{':
+      return '}';
+    default:
+      return '';
+  }
+}
+
+function printableSyntaxNodeType(type: string): string {
+  return type.length === 1 ? `'${type}'` : type;
+}
+
+function rangeContainsPosition(range: Range, position: Position): boolean {
+  return (
+    comparePositions(position, range.start) >= 0 &&
+    comparePositions(position, range.end) <= 0
+  );
+}
+
+function comparePositions(left: Position, right: Position): number {
+  if (left.line !== right.line) return left.line - right.line;
+
+  return left.character - right.character;
+}
+
+function uniqueDiagnostics(diagnostics: Diagnostic[]): Diagnostic[] {
+  const seen = new Set<string>();
+  const unique: Diagnostic[] = [];
+
+  for (const diagnostic of diagnostics) {
+    const key = [
+      diagnostic.range.start.line,
+      diagnostic.range.start.character,
+      diagnostic.range.end.line,
+      diagnostic.range.end.character,
+      diagnostic.message,
+    ].join(':');
+
+    if (seen.has(key)) continue;
+
+    seen.add(key);
+    unique.push(diagnostic);
+  }
+
+  return unique;
 }
 
 function callableHeaderEndIndex(source: string, startIndex: number): number {

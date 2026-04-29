@@ -55,7 +55,8 @@ export function prepareRename(
   if (!symbol || index.sourceKindForSymbol(symbol) !== 'workspace') return null;
 
   return {
-    range: referenceNameRange(doc, position, symbol.name) ?? symbol.selectionRange,
+    range:
+      referenceNameRange(doc, position, symbol.name) ?? symbol.selectionRange,
     placeholder: symbol.name,
   };
 }

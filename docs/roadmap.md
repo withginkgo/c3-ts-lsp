@@ -22,12 +22,24 @@ The server currently provides a working prototype:
   variable type context.
 - Position-aware resolver with import, relative module, module alias,
   visibility, ambiguity, and unresolved-symbol handling.
+- Import and module-alias path completions for indexed workspace, dependency,
+  and standard-library modules.
+- Auto-import completions for unimported public symbols, using
+  `additionalTextEdits` to insert the needed import.
+- Server initialization helpers split capability declarations, transport
+  detection, workspace roots, stdlib roots, and path normalization from the LSP
+  entrypoint.
+- Completion cursor/context detection is split from completion item generation.
 - Scope and member-aware hover, definition, completion, diagnostics, and
   references for parameters, locals, and struct fields.
 - Named argument completions inside function, macro, and method-style calls.
+- Attribute-aware completions after `@`, including built-in attributes and
+  visible `attrdef` declarations.
 - Lightweight expression type inference for chained members, function call
   return values, subscript receivers, parenthesized expressions, and simple
   pointer-style unary expressions.
+- Implemented interface methods participate in member lookup and type method
+  declaration completions, e.g. `struct Baz(MyName)` suggesting `myname`.
 - Type inference for `??` orelse expressions used by common unwrap/fallback
   flows.
 - Default-parameter signatures and ambiguous duplicate symbol handling that
@@ -70,6 +82,7 @@ analysis, or editor packaging.
 
 ```text
 src/server.ts              LSP process entrypoint and request wiring
+src/server/                LSP capabilities and environment/configuration helpers
 src/lsp/                   LSP feature handlers and document helpers
 src/parser/                Tree-sitter parsing and C3 syntax extraction
 src/project/               Workspace module index and symbol resolution
@@ -251,6 +264,7 @@ Exit criteria:
 
 1. Split scope, resolver, and type inference out of `project-index.ts` once the
    current behavior stabilizes.
-2. Extend type analysis for implicit conversions, enum values, aliases,
+2. Continue shrinking `src/server.ts` into lifecycle and request registration.
+3. Extend type analysis for implicit conversions, enum values, aliases,
    typedefs, and method-style calls.
-3. Add declaration-site diagnostics for invalid parameter declarations.
+4. Add declaration-site diagnostics for invalid parameter declarations.

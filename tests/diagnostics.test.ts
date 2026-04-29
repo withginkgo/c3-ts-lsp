@@ -315,6 +315,87 @@ test('semanticDiagnostics accepts self members inside type methods', () => {
   assert.deepEqual(semanticDiagnostics(index, parsed), []);
 });
 
+test('semanticDiagnostics reports methods without receiver parameters', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'struct Baz {}',
+      'fn String Baz.myname() @dynamic {',
+      '    return "i am baz!";',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(
+    semanticDiagnostics(index, parsed).map((diagnostic) => [
+      diagnostic.message,
+      diagnostic.range.start.line,
+      diagnostic.range.start.character,
+    ]),
+    [
+      [
+        "A method must start with an argument of the type it is a method of, e.g. 'fn String Baz.myname(Baz* self)'",
+        2,
+        14,
+      ],
+    ],
+  );
+});
+
+test('semanticDiagnostics validates explicit method receiver parameter types', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'struct Baz {}',
+      'fn String Baz.valid(Baz* self) { return ""; }',
+      'fn String Baz.invalid(String self) { return ""; }',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(
+    semanticDiagnostics(index, parsed).map((diagnostic) => diagnostic.message),
+    [
+      "A method must start with an argument of the type it is a method of, e.g. 'fn String Baz.invalid(Baz* self)'",
+    ],
+  );
+});
+
+test('semanticDiagnostics accepts implemented interface method calls with arguments', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'interface Renamable {',
+      '    fn void rename(String name);',
+      '}',
+      'struct Baz(Renamable) {',
+      '}',
+      'fn void use(Baz baz) {',
+      '    baz.rename("ok");',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(semanticDiagnostics(index, parsed), []);
+});
+
 test('semanticDiagnostics accepts generic receiver methods on self fields', () => {
   const index = new ProjectIndex();
   const uri = 'file:///workspace/app.c3';

@@ -1,5 +1,5 @@
 {
-  "name": "untitled",
+  "name": "c3-ts-lsp",
   "private": true,
   "version": "0.2.0",
   "type": "module",
@@ -12,7 +12,9 @@
     "debug:symbols": "node --import tsx src/tools/debug-symbols.ts",
     "test": "npm run test:typecheck && node --import tsx --test \"tests/**/*.test.ts\"",
     "test:typecheck": "tsc --noEmit --project tsconfig.test.json",
-    "check": "npm test && npm run build",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check": "npm run format:check && npm test && npm run build",
     "build": "tsc",
     "start": "node dist/server.js --stdio"
   },

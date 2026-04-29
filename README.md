@@ -20,8 +20,15 @@ symbols, code actions, semantic tokens, and inlay hints.
   variable types.
 - Module-aware completions for direct, imported, relative, and aliased module
   paths.
+- Import and module-alias path completions for indexed workspace, dependency,
+  and standard-library modules.
+- Auto-import completions for unimported public symbols, using LSP
+  `additionalTextEdits` to insert the needed import.
 - Scope-aware completions for parameters, locals, chained expression receivers,
-  incomplete member access, and struct members.
+  incomplete member access, struct members, implemented interface methods, and
+  type method declarations.
+- Attribute-aware completions after `@`, including built-in attributes and
+  visible `attrdef` declarations.
 - Named argument completions inside function, macro, and method-style calls.
 - Basic expression type analysis for member access, call return values,
   subscript expressions, pointer-like type suffixes, `??` orelse expressions,
@@ -46,7 +53,9 @@ symbols, code actions, semantic tokens, and inlay hints.
 
 ```text
 src/server.ts                 LSP entrypoint and request wiring
+src/server/                   LSP capabilities, initialization, and environment helpers
 src/lsp/completions.ts        Completion item generation
+src/lsp/completion-context.ts Completion cursor/context detection
 src/lsp/document-symbols.ts   DocumentSymbol conversion
 src/lsp/document-refs.ts      Identifier/reference extraction from documents
 src/lsp/hover.ts              Hover formatting
@@ -68,6 +77,7 @@ src/shared/callable.ts        Callable and parameter metadata helpers
 src/shared/calls.ts           Call-expression syntax helpers
 src/tools/                    Local debug scripts
 tests/                        Node test runner coverage for parser/index/LSP helpers
+docs/architecture.md          Module boundaries and dependency direction
 docs/roadmap.md               Implementation plan toward a usable C3 LSP
 docs/versioning.md            Versioning and release workflow
 ```
@@ -77,6 +87,8 @@ docs/versioning.md            Versioning and release workflow
 ```bash
 npm test
 npm run check
+npm run format
+npm run format:check
 npm run build
 npm start
 npm run dev

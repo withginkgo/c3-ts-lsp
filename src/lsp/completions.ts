@@ -1,5 +1,6 @@
 import {
   CompletionItemKind,
+  InsertTextFormat,
   SymbolKind,
   type CompletionItem,
   type Position,
@@ -15,6 +16,21 @@ import {
   C3_KEYWORDS,
 } from '../shared/language-data.js';
 import type { C3Symbol, ParsedDocument } from '../shared/types.js';
+import {
+  attributeCompletionBeforeCursor,
+  callArgumentContextBeforeCursor,
+  dotAccessCompletionBeforeCursor,
+  memberAccessBeforeCursor,
+  methodContext,
+  modulePathCompletionBeforeCursor,
+  modulePrefixBeforeCursor,
+  namedArgumentsBeforeCursor,
+  type AttributeCompletionContext,
+  type CallArgumentContext,
+  type ModulePathCompletionContext,
+  typeMethodDeclarationBeforeCursor,
+} from './completion-context.js';
+import { importTextEdit } from './import-edits.js';
 
 export function completionItems(
   index: ProjectIndex,
@@ -23,6 +39,32 @@ export function completionItems(
   position: Position,
 ): CompletionItem[] {
   if (!doc || !current) return keywordCompletions();
+
+  const modulePathCompletion = modulePathCompletionBeforeCursor(doc, position);
+
+  if (modulePathCompletion) {
+    return modulePathCompletions(index, current, modulePathCompletion);
+  }
+
+  const attributeCompletion = attributeCompletionBeforeCursor(doc, position);
+
+  if (attributeCompletion) {
+    return attributeCompletions(index, current, position, attributeCompletion);
+  }
+
+  const typeMethodDeclaration = typeMethodDeclarationBeforeCursor(
+    doc,
+    position,
+  );
+
+  if (typeMethodDeclaration) {
+    return methodCompletionsForType(
+      index,
+      current,
+      typeMethodDeclaration.receiver,
+      typeMethodDeclaration.position,
+    );
+  }
 
   const memberAccess = memberAccessBeforeCursor(doc, position);
 
@@ -35,6 +77,10 @@ export function completionItems(
     );
   }
 
+  if (dotAccessCompletionBeforeCursor(doc, position)) {
+    return [];
+  }
+
   const prefix = modulePrefixBeforeCursor(doc, position);
 
   if (prefix) {
@@ -42,50 +88,82 @@ export function completionItems(
   }
 
   const argumentItems = argumentNameCompletions(index, doc, current, position);
+  const visibleSymbols = index.visibleSymbolsAt(current.uri, position);
+  const visibleNames = new Set(visibleSymbols.map((symbol) => symbol.name));
 
-  const symbolItems: CompletionItem[] = index
-    .visibleSymbolsAt(current.uri, position)
-    .map((symbol) => ({
-      label: symbol.name,
-      kind: toCompletionKind(symbol.kind),
-      detail: symbol.signature,
-    }));
+  const symbolItems = visibleSymbols.map((symbol) =>
+    symbolCompletionItem(symbol),
+  );
+  const autoImportItems = index
+    .autoImportCandidates(current)
+    .filter(({ symbol }) => !visibleNames.has(symbol.name))
+    .map(({ moduleName, symbol }) =>
+      autoImportCompletionItem(current, moduleName, symbol),
+    );
 
-  return [...argumentItems, ...keywordCompletions(), ...symbolItems];
+  return [
+    ...argumentItems,
+    ...keywordCompletions(),
+    ...symbolItems,
+    ...autoImportItems,
+  ];
 }
 
-function memberAccessBeforeCursor(
-  doc: TextDocument,
+function attributeCompletions(
+  index: ProjectIndex,
+  current: ParsedDocument,
   position: Position,
-): { receiver: string; position: Position } | null {
-  const text = doc.getText();
-  const offset = doc.offsetAt(position);
-  const before = text.slice(0, offset);
-  const match = before.match(
-    /((?:[&*]\s*)?(?:\([^()\n]+\)|[A-Za-z_$@][A-Za-z0-9_$@]*(?:(?:::[A-Za-z_$@][A-Za-z0-9_$@]*)|\([^()\n]*\)|\[[^\]\n]*\]|\.[A-Za-z_$@][A-Za-z0-9_$@]*)*))\.(?:[A-Za-z_$@][A-Za-z0-9_$@]*)?$/,
-  );
+  context: AttributeCompletionContext,
+): CompletionItem[] {
+  return uniqueCompletionItems([
+    ...C3_BUILTIN_ATTRIBUTES.filter((attribute) =>
+      attributeMatchesPrefix(attribute, context.prefix),
+    ).map((attribute) => attributeCompletionItem(attribute, context)),
+    ...index
+      .visibleSymbolsAt(current.uri, position)
+      .filter(
+        (symbol) =>
+          symbol.kind === SymbolKind.Property &&
+          symbol.name.startsWith('@') &&
+          attributeMatchesPrefix(symbol.name, context.prefix),
+      )
+      .map((symbol) =>
+        attributeCompletionItem(symbol.name, context, symbol.signature),
+      ),
+  ]);
+}
 
-  if (!match || match.index == null) return null;
+function attributeMatchesPrefix(attribute: string, prefix: string): boolean {
+  const name = attributeName(attribute);
+
+  return (
+    prefix.length === 0 ||
+    attribute.startsWith(`@${prefix}`) ||
+    name.startsWith(prefix)
+  );
+}
+
+function attributeCompletionItem(
+  attribute: string,
+  context: AttributeCompletionContext,
+  detail?: string,
+): CompletionItem {
+  const name = attributeName(attribute);
 
   return {
-    receiver: match[1],
-    position: doc.positionAt(match.index + match[1].length),
+    label: attribute,
+    kind: CompletionItemKind.Property,
+    detail,
+    filterText: name,
+    textEdit: {
+      range: context.replaceRange,
+      newText: name,
+    },
   };
 }
 
-function modulePrefixBeforeCursor(
-  doc: TextDocument,
-  position: Position,
-): string | null {
-  const text = doc.getText();
-  const offset = doc.offsetAt(position);
-  const before = text.slice(0, offset);
-
-  const match = before.match(
-    /([A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*)::$/,
-  );
-
-  return match?.[1] ?? null;
+function attributeName(attribute: string): string {
+  return attribute.startsWith('@') ? attribute.slice(1) : attribute;
 }
 
 function argumentNameCompletions(
@@ -147,79 +225,6 @@ function callableForContext(
     : null;
 }
 
-type CallArgumentContext = {
-  callee: string;
-  calleePosition: Position;
-  argumentsText: string;
-};
-
-function callArgumentContextBeforeCursor(
-  doc: TextDocument,
-  position: Position,
-): CallArgumentContext | null {
-  const text = doc.getText();
-  const offset = doc.offsetAt(position);
-  const parenOffset = openParenBeforeCursor(text, offset);
-  if (parenOffset == null) return null;
-
-  const calleeMatch = text
-    .slice(0, parenOffset)
-    .match(
-      /([A-Za-z_$@][A-Za-z0-9_$@]*(?:(?:::[A-Za-z_$@][A-Za-z0-9_$@]*)|\.[A-Za-z_$@][A-Za-z0-9_$@]*)*)\s*$/,
-    );
-  if (!calleeMatch?.[1] || calleeMatch.index == null) return null;
-
-  const calleeStart = calleeMatch.index;
-
-  return {
-    callee: calleeMatch[1],
-    calleePosition: doc.positionAt(calleeStart),
-    argumentsText: text.slice(parenOffset + 1, offset),
-  };
-}
-
-function openParenBeforeCursor(text: string, offset: number): number | null {
-  let depth = 0;
-
-  for (let index = offset - 1; index >= 0; index--) {
-    const char = text[index];
-
-    if (char === ')') {
-      depth++;
-      continue;
-    }
-
-    if (char === '(') {
-      if (depth === 0) return index;
-      depth--;
-    }
-  }
-
-  return null;
-}
-
-function methodContext(
-  callee: string,
-): { receiver: string; name: string } | null {
-  const separator = callee.lastIndexOf('.');
-  if (separator <= 0 || separator === callee.length - 1) return null;
-
-  return {
-    receiver: callee.slice(0, separator),
-    name: callee.slice(separator + 1),
-  };
-}
-
-function namedArgumentsBeforeCursor(text: string): Set<string> {
-  const names = new Set<string>();
-
-  for (const match of text.matchAll(/\b([A-Za-z_][A-Za-z0-9_]*)\s*:/g)) {
-    names.add(match[1]);
-  }
-
-  return names;
-}
-
 function keywordCompletions(): CompletionItem[] {
   return [
     ...C3_KEYWORDS.map((keyword) => ({
@@ -249,9 +254,57 @@ function memberCompletions(
 ): CompletionItem[] {
   return index
     .memberSymbolsForExpression(current.uri, receiver, position)
+    .map((symbol) => memberCompletionItem(symbol));
+}
+
+function memberCompletionItem(symbol: C3Symbol): CompletionItem {
+  const item: CompletionItem = {
+    label: symbol.name,
+    kind: toCompletionKind(symbol.kind),
+    detail: symbol.signature,
+  };
+
+  if (symbol.kind === SymbolKind.Method) {
+    item.insertText = `${symbol.name}($0)`;
+    item.insertTextFormat = InsertTextFormat.Snippet;
+  }
+
+  return item;
+}
+
+function symbolCompletionItem(symbol: C3Symbol): CompletionItem {
+  return {
+    label: symbol.name,
+    kind: toCompletionKind(symbol.kind),
+    detail: symbol.signature,
+  };
+}
+
+function autoImportCompletionItem(
+  current: ParsedDocument,
+  moduleName: string,
+  symbol: C3Symbol,
+): CompletionItem {
+  return {
+    ...symbolCompletionItem(symbol),
+    detail: `${symbol.signature} (auto import ${moduleName})`,
+    sortText: `~${symbol.name}`,
+    additionalTextEdits: [importTextEdit(current, moduleName)],
+  };
+}
+
+function methodCompletionsForType(
+  index: ProjectIndex,
+  current: ParsedDocument,
+  typeName: string,
+  position: Position,
+): CompletionItem[] {
+  return index
+    .memberSymbolsForType(current.uri, typeName, position)
+    .filter((symbol) => symbol.kind === SymbolKind.Method)
     .map((symbol) => ({
       label: symbol.name,
-      kind: toCompletionKind(symbol.kind),
+      kind: CompletionItemKind.Method,
       detail: symbol.signature,
     }));
 }
@@ -284,6 +337,24 @@ function moduleMemberCompletions(
   ];
 }
 
+function modulePathCompletions(
+  index: ProjectIndex,
+  current: ParsedDocument,
+  context: ModulePathCompletionContext,
+): CompletionItem[] {
+  return index
+    .modulePathCandidates(current, context.pathPrefix)
+    .map((candidate) => ({
+      label: candidate.label,
+      kind: CompletionItemKind.Module,
+      detail: `module ${candidate.moduleName}`,
+      textEdit: {
+        range: context.replaceRange,
+        newText: candidate.label,
+      },
+    }));
+}
+
 function toCompletionKind(kind: SymbolKind): CompletionItemKind {
   switch (kind) {
     case SymbolKind.Function:
@@ -305,4 +376,18 @@ function toCompletionKind(kind: SymbolKind): CompletionItemKind {
     default:
       return CompletionItemKind.Text;
   }
+}
+
+function uniqueCompletionItems(items: CompletionItem[]): CompletionItem[] {
+  const seen = new Set<string>();
+  const unique: CompletionItem[] = [];
+
+  for (const item of items) {
+    if (seen.has(item.label)) continue;
+
+    seen.add(item.label);
+    unique.push(item);
+  }
+
+  return unique;
 }

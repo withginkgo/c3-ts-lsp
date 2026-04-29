@@ -1,0 +1,17 @@
+node_modules/
+dist/
+dist-ssr/
+public/
+.codex/
+.idea/
+.venv/
+tree-sitter-c3/
+c3c/
+obj/
+*.log
+
+# Reference or archived source dumps that should not be normalized by Prettier.
+docs/keywords.md
+docs/releasenotes.md
+docs/yacc_grammar.md
+src/c3-ts-lsp.md
