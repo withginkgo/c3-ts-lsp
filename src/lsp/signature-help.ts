@@ -13,9 +13,15 @@ import { isCallableSymbol, callableParameters } from '../shared/callable.js';
 import {
   callArguments,
   callTargetFor,
+  type C3CallTarget,
   rangeFromNode,
 } from '../shared/calls.js';
-import type { C3Parameter, ParsedDocument } from '../shared/types.js';
+import type { C3Parameter, C3Symbol, ParsedDocument } from '../shared/types.js';
+import {
+  callArgumentContextBeforeCursor,
+  methodContext,
+  type CallArgumentContext,
+} from './completion-context.js';
 
 export function signatureHelp(
   index: ProjectIndex,
@@ -26,7 +32,9 @@ export function signatureHelp(
   if (!doc || !current) return null;
 
   const call = callExpressionAtPosition(current.tree.rootNode, position);
-  if (!call) return null;
+  if (!call) {
+    return signatureHelpFromTextContext(index, doc, current, position);
+  }
 
   const functionNode = call.childForFieldName('function');
   if (!functionNode) return null;
@@ -34,14 +42,7 @@ export function signatureHelp(
   const callTarget = callTargetFor(functionNode);
   if (!callTarget) return null;
 
-  const result = index.resolveSymbol(
-    current.uri,
-    callTarget.ref,
-    callTarget.position,
-  );
-  const callables = (
-    result.selected ? [result.selected] : result.candidates
-  ).filter(isCallableSymbol);
+  const callables = callablesForTarget(index, current, callTarget);
 
   if (callables.length === 0) return null;
 
@@ -56,17 +57,107 @@ export function signatureHelp(
   );
 
   return {
-    signatures: callables.map(
-      (symbol): SignatureInformation => ({
-        label: symbol.signature,
-        documentation: symbol.documentation,
-        parameters: callableParameters(symbol, {
-          methodStyle: callTarget.methodStyle,
-        }).map((parameter) => ParameterInformation.create(parameter.label)),
-      }),
+    signatures: callables.map((symbol) =>
+      signatureInformation(symbol, callTarget.methodStyle),
     ),
     activeSignature: 0,
     activeParameter,
+  };
+}
+
+function signatureHelpFromTextContext(
+  index: ProjectIndex,
+  doc: TextDocument,
+  current: ParsedDocument,
+  position: Position,
+): SignatureHelp | null {
+  const context = callArgumentContextBeforeCursor(doc, position);
+  if (!context) return null;
+
+  const { callables, methodStyle } = callablesForTextContext(
+    index,
+    current,
+    context,
+  );
+  if (callables.length === 0) return null;
+
+  const firstParameters = callableParameters(callables[0]!, { methodStyle });
+
+  return {
+    signatures: callables.map((symbol) =>
+      signatureInformation(symbol, methodStyle),
+    ),
+    activeSignature: 0,
+    activeParameter: activeParameterIndexFromText(
+      context.argumentsText,
+      firstParameters,
+    ),
+  };
+}
+
+function callablesForTarget(
+  index: ProjectIndex,
+  current: ParsedDocument,
+  callTarget: C3CallTarget,
+): C3Symbol[] {
+  const result = index.resolveSymbol(
+    current.uri,
+    callTarget.ref,
+    callTarget.position,
+  );
+
+  return (result.selected ? [result.selected] : result.candidates).filter(
+    isCallableSymbol,
+  );
+}
+
+function callablesForTextContext(
+  index: ProjectIndex,
+  current: ParsedDocument,
+  context: CallArgumentContext,
+): { callables: C3Symbol[]; methodStyle: boolean } {
+  const method = methodContext(context.callee);
+
+  if (method) {
+    return {
+      methodStyle: true,
+      callables: index
+        .memberSymbolsForExpression(
+          current.uri,
+          method.receiver,
+          context.calleePosition,
+        )
+        .filter(
+          (candidate) =>
+            candidate.name === method.name && isCallableSymbol(candidate),
+        ),
+    };
+  }
+
+  return {
+    methodStyle: false,
+    callables: callablesForTarget(index, current, {
+      ref: context.callee,
+      position: context.calleePosition,
+      methodStyle: false,
+      range: {
+        start: context.calleePosition,
+        end: context.calleePosition,
+      },
+    }),
+  };
+}
+
+function signatureInformation(
+  symbol: C3Symbol,
+  methodStyle: boolean,
+): SignatureInformation {
+  return {
+    label: symbol.signature,
+    documentation: symbol.documentation,
+    parameters: callableParameters(symbol, { methodStyle }).map((parameter) =>
+      ParameterInformation.create(parameter.label),
+    ),
   };
 }
 
@@ -120,13 +211,46 @@ function activeParameterIndex(
   return parameters.length > 0 ? Math.min(index, parameters.length - 1) : 0;
 }
 
+function activeParameterIndexFromText(
+  argumentsText: string,
+  parameters: C3Parameter[],
+): number {
+  const named = activeArgumentText(argumentsText).match(
+    /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*:/,
+  );
+  if (named?.[1]) {
+    const namedIndex = parameters.findIndex(
+      (parameter) => parameter.name === named[1],
+    );
+    if (namedIndex >= 0) return namedIndex;
+  }
+
+  const index = countTopLevelCommas(argumentsText);
+  return parameters.length > 0 ? Math.min(index, parameters.length - 1) : 0;
+}
+
+function activeArgumentText(argumentsText: string): string {
+  const comma = lastTopLevelCommaIndex(argumentsText);
+  return argumentsText.slice(comma + 1);
+}
+
+function lastTopLevelCommaIndex(text: string): number {
+  return topLevelCommaIndexes(text).at(-1) ?? -1;
+}
+
 function countTopLevelCommas(text: string): number {
-  let commas = 0;
+  return topLevelCommaIndexes(text).length;
+}
+
+function topLevelCommaIndexes(text: string): number[] {
+  const commas: number[] = [];
   let depth = 0;
   let quote: string | undefined;
   let escaped = false;
 
-  for (const char of text) {
+  for (let index = 0; index < text.length; index++) {
+    const char = text[index];
+
     if (quote) {
       if (escaped) {
         escaped = false;
@@ -157,7 +281,7 @@ function countTopLevelCommas(text: string): number {
       continue;
     }
 
-    if (char === ',' && depth === 0) commas++;
+    if (char === ',' && depth === 0) commas.push(index);
   }
 
   return commas;

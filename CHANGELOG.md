@@ -32,6 +32,8 @@ All notable project changes are recorded here.
 - Added type usage references for type declarations.
 - Added workspace symbols for indexed project declarations and nested members.
 - Added signature help for function and macro calls.
+- Added signature help fallback for incomplete function and method-style calls
+  while editing.
 - Added rename support with workspace edits for non-stdlib symbols.
 - Added code actions for missing imports and unresolved import cleanup.
 - Added semantic tokens for declaration-oriented highlighting.

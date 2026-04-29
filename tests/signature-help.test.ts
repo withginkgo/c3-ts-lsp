@@ -40,6 +40,62 @@ test('signatureHelp returns active function parameter in a single file', () => {
   );
 });
 
+test('signatureHelp works while editing incomplete function calls', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'fn void connect(String host, int port = 80, String[] ...tags) {}',
+    'fn void use() {',
+    '    connect("example", ',
+    '}',
+    '',
+  ].join('\n');
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+  const parsed = parseSource(uri, source);
+
+  index.upsert(parsed);
+
+  const position = doc.positionAt(
+    source.indexOf('connect("example", ') + 'connect("example", '.length,
+  );
+  const help = signatureHelp(index, doc, parsed, position);
+
+  assert.equal(help?.activeParameter, 1);
+  assert.deepEqual(
+    help?.signatures[0]?.parameters?.map((parameter) => parameter.label),
+    ['String host', 'int port = 80', 'String[] ...tags'],
+  );
+});
+
+test('signatureHelp maps incomplete named arguments to their parameters', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'fn void connect(String host, int port = 80, String[] ...tags) {}',
+    'fn void use() {',
+    '    connect(port: ',
+    '}',
+    '',
+  ].join('\n');
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+  const parsed = parseSource(uri, source);
+
+  index.upsert(parsed);
+
+  const position = doc.positionAt(
+    source.indexOf('connect(port: ') + 'connect(port: '.length,
+  );
+  const help = signatureHelp(index, doc, parsed, position);
+
+  assert.equal(help?.activeParameter, 1);
+  assert.equal(
+    help?.signatures[0]?.label,
+    'void connect(String host, int port = 80, String[] ...tags)',
+  );
+});
+
 test('signatureHelp resolves imported macro calls across files', () => {
   const index = new ProjectIndex();
   const appUri = 'file:///workspace/app.c3';
@@ -138,6 +194,38 @@ test('signatureHelp resolves method-style calls and skips receiver parameters', 
     parsed,
     doc.positionAt(source.indexOf('1);')),
   );
+
+  assert.equal(help?.activeParameter, 0);
+  assert.deepEqual(
+    help?.signatures.map((signature) => [
+      signature.label,
+      signature.parameters?.map((parameter) => parameter.label),
+    ]),
+    [['void EventLoop.init(&self, int count)', ['int count']]],
+  );
+});
+
+test('signatureHelp resolves incomplete method-style calls and skips receiver parameters', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'struct EventLoop {}',
+    'fn void EventLoop.init(&self, int count) {}',
+    'fn void use(EventLoop loop) {',
+    '    loop.init(',
+    '}',
+    '',
+  ].join('\n');
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+  const parsed = parseSource(uri, source);
+
+  index.upsert(parsed);
+
+  const position = doc.positionAt(
+    source.indexOf('loop.init(') + 'loop.init('.length,
+  );
+  const help = signatureHelp(index, doc, parsed, position);
 
   assert.equal(help?.activeParameter, 0);
   assert.deepEqual(

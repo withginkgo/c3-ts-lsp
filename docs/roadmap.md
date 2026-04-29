@@ -50,7 +50,7 @@ The server currently provides a working prototype:
 - Type usage references for type declarations.
 - Workspace symbols for project declarations and nested members.
 - Signature help for function, macro, and method-style calls, including
-  default, named, and variadic parameters.
+  default, named, variadic parameters, and incomplete calls while editing.
 - Rename with workspace edits across declarations and references.
 - Code actions for missing imports and unresolved import cleanup.
 - Semantic tokens for declaration highlighting.
