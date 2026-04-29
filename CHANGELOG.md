@@ -78,6 +78,9 @@ All notable project changes are recorded here.
   range so rename edits preserve the module prefix.
 - Made C3 type methods such as `fn void EventLoop.init(&self)` bind `self` to
   the receiver type and participate in member resolution.
+- Made diagnostics keep running recoverable semantic checks outside syntax-error
+  ranges, so later incomplete syntax no longer hides earlier optional-result,
+  type, call, and declaration diagnostics.
 - Made member resolution derive a nominal base type from generic receiver types
   such as `HashMap{K, V}` and `List{T}` before matching type methods.
 - Made recovered callables from parser-error regions preserve C3 receiver

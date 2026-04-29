@@ -32,7 +32,10 @@ workspace roots, stdlib roots, and path normalization out of LSP feature code.
 - `src/analysis/` produces semantic facts and diagnostics from parsed documents
   and the project index. Shared helpers in this layer keep conservative
   expression type inference and mismatch checks reusable across return, call,
-  assignment, condition, optional-result, and declaration diagnostics.
+  assignment, condition, optional-result, and declaration diagnostics. When the
+  parser reports syntax errors, the diagnostic entry point still runs
+  recoverable semantic checks and suppresses only diagnostics that overlap the
+  syntax-error ranges.
 - `src/lsp/` turns parsed/indexed data into protocol objects. Cursor/context
   parsing that is specific to a feature lives next to that feature, such as
   `completion-context.ts`.

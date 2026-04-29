@@ -39,20 +39,52 @@ export function semanticDiagnostics(
     ...unresolvedImportDiagnostics(index, parsed),
     ...unresolvedModuleAliasDiagnostics(index, parsed),
   ];
+  const returnValueDiagnostics = returnDiagnostics(index, parsed);
 
   if (parsed.diagnostics.length > 0) {
-    return [...importDiagnostics, ...returnDiagnostics(index, parsed)];
+    return [
+      ...importDiagnostics,
+      ...returnValueDiagnostics,
+      ...diagnosticsOutsideSyntaxErrors(
+        parsed,
+        recoverableSemanticDiagnostics(index, parsed),
+      ),
+    ];
   }
 
   return [
     ...importDiagnostics,
+    ...fullSemanticDiagnostics(index, parsed, returnValueDiagnostics),
+  ];
+}
+
+function fullSemanticDiagnostics(
+  index: ProjectIndex,
+  parsed: ParsedDocument,
+  returnValueDiagnostics = returnDiagnostics(index, parsed),
+): Diagnostic[] {
+  return [
     ...duplicateCallableDiagnostics(index, parsed),
     ...declarationDiagnostics(index, parsed),
     ...methodReceiverDiagnostics(parsed),
     ...typeReferenceDiagnostics(index, parsed),
     ...interfaceImplementationDiagnostics(index, parsed),
-    ...returnDiagnostics(index, parsed),
+    ...returnValueDiagnostics,
     ...referenceDiagnostics(index, parsed),
+    ...callDiagnostics(index, parsed),
+    ...expressionDiagnostics(index, parsed),
+  ];
+}
+
+function recoverableSemanticDiagnostics(
+  index: ProjectIndex,
+  parsed: ParsedDocument,
+): Diagnostic[] {
+  return [
+    ...duplicateCallableDiagnostics(index, parsed),
+    ...declarationDiagnostics(index, parsed),
+    ...methodReceiverDiagnostics(parsed),
+    ...typeReferenceDiagnostics(index, parsed),
     ...callDiagnostics(index, parsed),
     ...expressionDiagnostics(index, parsed),
   ];
@@ -480,6 +512,26 @@ function rangeFromNode(node: SyntaxNode): Range {
     node.startPosition.column,
     node.endPosition.row,
     node.endPosition.column,
+  );
+}
+
+function diagnosticsOutsideSyntaxErrors(
+  parsed: ParsedDocument,
+  diagnostics: Diagnostic[],
+): Diagnostic[] {
+  const syntaxRanges = parsed.diagnostics.map((diagnostic) => diagnostic.range);
+
+  return diagnostics.filter(
+    (diagnostic) =>
+      !syntaxRanges.some((syntaxRange) =>
+        rangesOverlap(diagnostic.range, syntaxRange),
+      ),
+  );
+}
+
+function rangesOverlap(a: Range, b: Range): boolean {
+  return (
+    comparePositions(a.start, b.end) < 0 && comparePositions(b.start, a.end) < 0
   );
 }
 

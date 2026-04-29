@@ -513,6 +513,107 @@ test('semanticDiagnostics reports discarded optional call results', () => {
   );
 });
 
+test('semanticDiagnostics reports discarded optional calls before later syntax errors', () => {
+  const index = new ProjectIndex();
+  const app = parseSource(
+    'file:///workspace/poll_demo/src/main.c3',
+    [
+      'module poll_demo;',
+      'import std::net,std::net::tcp;',
+      'import std::io,std::os,std::time;',
+      'const MAX_CLIENTS=64;',
+      'interface MyName{',
+      '    fn String myname();',
+      '}',
+      'struct Baz(MyName){',
+      '    int x;',
+      '}',
+      'fn String Baz.myname(&self) @dynamic {',
+      '    return "i am baz";',
+      '}',
+      'fn void run_reactor(){',
+      '    TcpServerSocket listener=tcp::listen("0.0.0.0",7777,10,',
+      '        net::SocketOption.REUSEADDR,net::SocketOption.REUSEPORT)',
+      '        ?? unreachable("listen failed");',
+      '    listener.set_option(net::SocketOption.REUSEADDR, true);',
+      '    (void)listener.sock.set_non_blocking(true);',
+      '    Poll[MAX_CLIENTS] poll_fds;',
+      '}',
+      'fn int main(String[] args)',
+      '{',
+      '    Baz baz;',
+      '    baz.x=1;',
+      '    const Y=1;',
+      '    io::printn(baz.myname());',
+      '    $assert(Y==1):"int should br 4 bytes";',
+      '    $assert',
+      '    defer catch',
+      '    return 0;',
+      '}',
+      '',
+    ].join('\n'),
+  );
+  const net = parseSource(
+    'file:///stdlib/std/net.c3',
+    [
+      'module std::net;',
+      'enum SocketOption : int { REUSEADDR, REUSEPORT }',
+      'struct Socket {}',
+      'struct Poll {}',
+      'fn void? Socket.set_non_blocking(&self, bool value);',
+      '',
+    ].join('\n'),
+    { sourceKind: 'stdlib' },
+  );
+  const tcp = parseSource(
+    'file:///stdlib/std/net/tcp.c3',
+    [
+      'module std::net::tcp;',
+      'import std::net;',
+      'struct TcpServerSocket { Socket sock; }',
+      'fn TcpServerSocket? listen(String host, int port, int backlog, SocketOption options...);',
+      'fn void? TcpServerSocket.set_option(&self, SocketOption option, bool enabled);',
+      '',
+    ].join('\n'),
+    { sourceKind: 'stdlib' },
+  );
+  const io = parseSource(
+    'file:///stdlib/std/io.c3',
+    ['module std::io;', 'fn void printn(String value);', ''].join('\n'),
+    { sourceKind: 'stdlib' },
+  );
+  const os = parseSource('file:///stdlib/std/os.c3', 'module std::os;\n', {
+    sourceKind: 'stdlib',
+  });
+  const time = parseSource(
+    'file:///stdlib/std/time.c3',
+    'module std::time;\n',
+    { sourceKind: 'stdlib' },
+  );
+  const core = parseSource(
+    'file:///stdlib/std/core/builtin.c3',
+    [
+      'module std::core;',
+      'macro void unreachable(String message = "failed", ...) @noreturn {',
+      '}',
+      '',
+    ].join('\n'),
+    { sourceKind: 'stdlib' },
+  );
+
+  for (const parsed of [app, net, tcp, io, os, time, core]) {
+    index.upsert(parsed, false);
+  }
+
+  index.rebuild();
+
+  assert.equal(app.diagnostics.length, 1);
+  assert.deepEqual(
+    semanticDiagnostics(index, app).map((diagnostic) => diagnostic.message),
+    ["Optional result of 'set_option' must be handled"],
+  );
+});
+
 test('semanticDiagnostics accepts handled optional call results and may-discard calls', () => {
   const index = new ProjectIndex();
   const uri = 'file:///workspace/app.c3';

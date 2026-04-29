@@ -73,6 +73,9 @@ The server currently provides a working prototype:
 - Semantic diagnostics for discarded optional call results, optional values
   assigned or returned into non-optional slots, invalid `void?` variables,
   optional `main` returns, and discarded `@nodiscard` call results.
+- Recoverable semantic diagnostics continue outside tree-sitter syntax-error
+  ranges, so incomplete code later in a file does not hide earlier optional,
+  call, type, or declaration issues.
 - Declaration-side diagnostics for duplicate function, type method, type,
   member, parameter, and local declarations.
 - Optional compiler-backed diagnostics through configured `c3c --lsp` output,
