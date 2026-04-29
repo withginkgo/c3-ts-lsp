@@ -16,6 +16,7 @@ import {
 } from '../shared/calls.js';
 import { terminalTypeName, typeNamesCompatible } from '../shared/type-ref.js';
 import type { C3Parameter, C3Symbol, ParsedDocument } from '../shared/types.js';
+import { returnDiagnostics } from './return-diagnostics.js';
 
 const diagnosticSource = 'c3-lsp';
 
@@ -29,13 +30,14 @@ export function semanticDiagnostics(
   ];
 
   if (parsed.diagnostics.length > 0) {
-    return importDiagnostics;
+    return [...importDiagnostics, ...returnDiagnostics(index, parsed)];
   }
 
   return [
     ...importDiagnostics,
     ...duplicateCallableDiagnostics(index, parsed),
     ...methodReceiverDiagnostics(parsed),
+    ...returnDiagnostics(index, parsed),
     ...referenceDiagnostics(index, parsed),
     ...callDiagnostics(index, parsed),
   ];

@@ -19,6 +19,9 @@ All notable project changes are recorded here.
   module-prefix completions.
 - Added semantic diagnostics for unresolved imports, unresolved module alias
   targets, unresolved expression symbols, and ambiguous expression symbols.
+- Added return-flow semantic diagnostics for missing return values, unexpected
+  values from `void` functions, obvious return type mismatches, and non-void
+  functions that can fall through.
 - Added member access resolution for struct members, including pointer-like
   receiver types.
 - Added basic expression type inference for chained members, call return values,

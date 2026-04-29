@@ -59,6 +59,9 @@ The server currently provides a working prototype:
 - Semantic diagnostics for unresolved imports, unresolved module aliases,
   unresolved expression symbols, unresolved members, and ambiguous expression
   symbols.
+- Semantic diagnostics for missing return values, unexpected values from
+  `void` functions, obvious return type mismatches, and non-void functions
+  that can fall through.
 - Semantic diagnostics for missing required call arguments, too many positional
   arguments, unknown named arguments, and duplicate supplied arguments.
 - Declaration-side diagnostics for duplicate function and type method

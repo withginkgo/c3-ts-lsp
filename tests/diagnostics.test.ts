@@ -256,7 +256,7 @@ test('semanticDiagnostics accepts var declarations inferred from initializers', 
       'struct HttpResponse {',
       '    String body;',
       '}',
-      'fn HttpResponse make_response() {}',
+      'fn HttpResponse make_response() { return {}; }',
       'fn void use() {',
       '    var response @safeinfer = make_response();',
       '    response.body;',
@@ -370,6 +370,120 @@ test('semanticDiagnostics validates explicit method receiver parameter types', (
       "A method must start with an argument of the type it is a method of, e.g. 'fn String Baz.invalid(Baz* self)'",
     ],
   );
+});
+
+test('semanticDiagnostics reports missing return values even with incomplete syntax', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'struct Baz {}',
+      'fn String Baz.myname(&self) @dynamic {',
+      '    return',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(
+    semanticDiagnostics(index, parsed).map((diagnostic) => [
+      diagnostic.message,
+      diagnostic.range.start.line,
+      diagnostic.range.start.character,
+    ]),
+    [
+      [
+        "Return statement in 'myname' must return a value of type 'String'",
+        3,
+        4,
+      ],
+    ],
+  );
+});
+
+test('semanticDiagnostics validates return values against callable return types', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'fn void log() {',
+      '    return 1;',
+      '}',
+      'fn String name() {',
+      '    return 1;',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(
+    semanticDiagnostics(index, parsed).map((diagnostic) => diagnostic.message),
+    [
+      "Void function 'log' should not return a value",
+      "Cannot return 'int' from 'name' with return type 'String'",
+    ],
+  );
+});
+
+test('semanticDiagnostics reports non-void functions that can fall through', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'fn int pick(bool ok) {',
+      '    if (ok) {',
+      '        return 1;',
+      '    }',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(
+    semanticDiagnostics(index, parsed).map((diagnostic) => diagnostic.message),
+    ["Function 'pick' must return a value of type 'int' on all paths"],
+  );
+});
+
+test('semanticDiagnostics accepts complete return paths and void-like returns', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'fn int pick(bool ok) {',
+      '    if (ok) {',
+      '        return 1;',
+      '    } else {',
+      '        return 2;',
+      '    }',
+      '}',
+      'fn void visit() {',
+      '    return;',
+      '}',
+      'fn void? try_visit() {',
+      '    return;',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(semanticDiagnostics(index, parsed), []);
 });
 
 test('semanticDiagnostics accepts implemented interface method calls with arguments', () => {
