@@ -137,10 +137,63 @@ through LSP initialization options:
 ```
 
 The server also accepts `stdlibPaths`, `standardLibraryPath`,
-`standardLibraryPaths`, `c3StdlibPath`, and `c3StdlibPaths`. Environment
-variables `C3_STDLIB_PATH`, `C3_STDLIB_ROOT`, and
-`C3_STANDARD_LIBRARY_PATH` are also supported. Multiple paths can be separated
-with the platform path delimiter.
+`standardLibraryPaths`, `c3StdlibPath`, `c3StdlibPaths`, `stdlib-path`,
+`c3.stdlib-path`, `c3.stdlibPath`, and `c3.standardLibraryPath`. Environment
+variables `C3_STDLIB_PATH`, `C3_STDLIB_ROOT`, and `C3_STANDARD_LIBRARY_PATH`
+are also supported. Multiple paths can be separated with the platform path
+delimiter.
+
+### VSCode extension integration
+
+This language server reads stdlib configuration from the LSP `initialize`
+request, not from extra command-line arguments passed when the server process is
+spawned. If you use the C3 VSCode extension, make sure the extension forwards
+its `stdlib-path` setting through the language client's `initializationOptions`.
+
+So, in the extension's `src/lsp.js`, you should insert following snippet:
+
+```js
+const serverOptions = {
+  run: {
+    command: executablePath,
+    args: args,
+  },
+  debug: {
+    command: executablePath,
+    args: args,
+    options: { execArgv: ['--nolazy', '--inspect=6009'] },
+  },
+};
+
+// initial arguments prepared for lsp server
+const initializationOptions = {};
+const stdlibPath = config.get('stdlib-path');
+
+if (stdlibPath) {
+  initializationOptions.stdlibPath = stdlibPath;
+}
+
+const clientOptions = {
+  documentSelector: [{ scheme: 'file', language: 'c3' }],
+  synchronize: {
+    fileEvents: vscode.workspace.createFileSystemWatcher('**/*.{c3,c3i}'),
+  },
+  // and insert this line
+  initializationOptions,
+};
+```
+
+Then, rebuild the extension and install from local .vsix file.Enable extension after configure **c3c path**, **c3lsp path**, **c3 std lib path**.
+
+This lsp may start from a bash file like:
+
+```bash
+#!/usr/bin/env bash
+exec node your_path_lsp/dist/server.js "$@"
+
+```
+
+Make bash file executable and set **c3 lsp path** your_path_to_bash_file.
 
 If `C3_HOME` or `C3C_HOME` is set, the server tries common library subfolders
 under that root.
