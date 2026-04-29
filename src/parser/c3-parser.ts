@@ -33,6 +33,7 @@ export function parseSource(
   const tree = parser.parse(source);
 
   const moduleName = extractModuleName(tree.rootNode);
+  const moduleAttributes = extractModuleAttributes(tree.rootNode);
   const importSpecs = extractImportSpecs(tree.rootNode);
   const imports = importSpecs.map((imp) => imp.path);
   const moduleAliases = extractModuleAliases(doc, tree.rootNode);
@@ -55,6 +56,7 @@ export function parseSource(
     symbols,
     scopedSymbols,
     moduleName,
+    moduleAttributes,
     imports,
     importSpecs,
     moduleAliases,
@@ -71,6 +73,14 @@ function extractModuleName(root: SyntaxNode): string {
 
   const modulePath = moduleDecl.childForFieldName('path');
   return modulePath?.text ?? '';
+}
+
+function extractModuleAttributes(root: SyntaxNode): string[] {
+  const moduleDecl = root.namedChildren.find(
+    (child) => child.type === 'module_declaration',
+  );
+
+  return moduleDecl ? attributesFor(moduleDecl) : [];
 }
 
 function extractImportSpecs(root: SyntaxNode): C3Import[] {
@@ -711,6 +721,31 @@ function localDeclarationSymbols(
       createSymbol(doc, parent, nameNode, moduleName, SymbolKind.Variable, {
         signature: declarationSignature(parent),
         attributes: attributesFor(declaration),
+        scopeRange,
+      }),
+    );
+  }
+
+  for (const declaration of descendantsOfType(scopeRoot, 'const_declaration')) {
+    const parent = declaration.parent;
+
+    if (parent?.type !== 'declaration_stmt') continue;
+
+    const nameNode = declaration.childForFieldName('name');
+    if (!nameNode) continue;
+
+    const scopeNode = nearestAncestorOfTypes(declaration, [
+      'compound_stmt',
+      'macro_func_body',
+      'lambda_body',
+      'ct_stmt_body',
+    ]);
+    const scopeRange = rangeFromNode(scopeNode ?? scopeRoot);
+
+    symbols.push(
+      createSymbol(doc, parent, nameNode, moduleName, SymbolKind.Constant, {
+        signature: declarationSignature(parent),
+        returnType: declaration.childForFieldName('type')?.text,
         scopeRange,
       }),
     );

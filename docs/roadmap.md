@@ -76,6 +76,11 @@ The server currently provides a working prototype:
 - Recoverable semantic diagnostics continue outside tree-sitter syntax-error
   ranges, so incomplete code later in a file does not hide earlier optional,
   call, type, or declaration issues.
+- Local `const` declarations participate in scoped symbol resolution, including
+  compile-time assertion expressions.
+- Standard-library `module ... @if(env::...)` platform branches are filtered
+  conservatively during indexing so inactive platform definitions do not create
+  false ambiguous type diagnostics.
 - Declaration-side diagnostics for duplicate function, type method, type,
   member, parameter, and local declarations.
 - Optional compiler-backed diagnostics through configured `c3c --lsp` output,

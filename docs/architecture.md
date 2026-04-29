@@ -25,10 +25,14 @@ workspace roots, stdlib roots, and path normalization out of LSP feature code.
 ## Module Boundaries
 
 - `src/parser/` converts C3 source text into `ParsedDocument` data. It should not
-  depend on LSP request handlers or workspace scanning.
+  depend on LSP request handlers or workspace scanning. Parsed documents include
+  module attributes and scoped declarations such as parameters, locals, and
+  local constants.
 - `src/project/` owns indexed module state and resolver queries. It can depend on
   parser output and shared type utilities, but should avoid formatting LSP
-  responses.
+  responses. The index applies a conservative environment filter for
+  `module ... @if(env::...)` branches, which keeps inactive stdlib platform
+  alternatives out of symbol resolution while leaving unknown conditions indexed.
 - `src/analysis/` produces semantic facts and diagnostics from parsed documents
   and the project index. Shared helpers in this layer keep conservative
   expression type inference and mismatch checks reusable across return, call,

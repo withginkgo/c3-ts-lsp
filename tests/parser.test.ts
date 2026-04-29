@@ -576,6 +576,25 @@ test('parseSource extracts var declarations as scoped symbols', () => {
   );
 });
 
+test('parseSource extracts local const declarations as scoped symbols', () => {
+  const parsed = parseSource(
+    'file:///workspace/app.c3',
+    [
+      'module app;',
+      'fn void use() {',
+      '    const Y=1;',
+      '    $assert(Y==1):"ok";',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  assert.equal(
+    parsed.scopedSymbols.find((symbol) => symbol.name === 'Y')?.signature,
+    'const Y=1;',
+  );
+});
+
 test('parseSource extracts for initializer declarations as scoped symbols', () => {
   const parsed = parseSource(
     'file:///workspace/app.c3',

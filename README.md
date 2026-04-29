@@ -145,6 +145,11 @@ with the platform path delimiter.
 If `C3_HOME` or `C3C_HOME` is set, the server tries common library subfolders
 under that root.
 
+When stdlib files use `module ... @if(env::...)`, the index filters branches
+that are definitely inactive for the current host environment. Unknown
+conditions stay indexed, but obvious platform alternatives such as Win32 files
+on Linux do not participate in symbol resolution.
+
 Compiler-backed diagnostics are opt-in. Enable them with initialization
 options:
 

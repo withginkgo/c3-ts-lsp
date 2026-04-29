@@ -19,10 +19,26 @@ import {
   normalizeTypeName,
   terminalTypeName,
 } from '../shared/type-ref.js';
+import {
+  defaultC3Environment,
+  normalizeC3Environment,
+  parsedIsActiveInEnvironment,
+} from './environment.js';
+
+export type ProjectIndexOptions = {
+  activeEnvironment?: Iterable<string>;
+};
 
 export class ProjectIndex {
   private readonly parsedByUri = new Map<string, ParsedDocument>();
   private readonly modulesByName = new Map<string, ModuleIndex>();
+  private readonly activeEnvironment: Set<string>;
+
+  constructor(options: ProjectIndexOptions = {}) {
+    this.activeEnvironment = normalizeC3Environment(
+      options.activeEnvironment ?? defaultC3Environment(),
+    );
+  }
 
   getParsed(uri: string): ParsedDocument | undefined {
     return this.parsedByUri.get(uri);
@@ -36,7 +52,10 @@ export class ProjectIndex {
     const normalizedQuery = query.trim().toLowerCase();
 
     return this.allParsed()
-      .filter((parsed) => parsed.sourceKind === 'workspace')
+      .filter(
+        (parsed) =>
+          parsed.sourceKind === 'workspace' && this.shouldIndexParsed(parsed),
+      )
       .flatMap((parsed) => flattenSymbols(parsed.symbols))
       .filter((symbol) =>
         normalizedQuery
@@ -172,7 +191,7 @@ export class ProjectIndex {
     const current = this.parsedByUri.get(currentUri);
     if (!current) return { candidates: [], reason: 'not_found' };
 
-    return resultFromCandidates(
+    return this.resultFromCandidates(
       this.typeSymbolCandidates(current, nominalTypeName(typeName), position),
     );
   }
@@ -271,25 +290,27 @@ export class ProjectIndex {
     );
 
     if (memberCandidates) {
-      return resultFromCandidates(memberCandidates);
+      return this.resultFromCandidates(memberCandidates);
     }
 
     if (ref.includes('::')) {
-      return resultFromCandidates(this.qualifiedSymbolCandidates(current, ref));
+      return this.resultFromCandidates(
+        this.qualifiedSymbolCandidates(current, ref),
+      );
     }
 
     const declared = findDeclaredSymbolAt(current.symbols, ref, position);
-    if (declared) return resultFromCandidates([declared]);
+    if (declared) return this.resultFromCandidates([declared]);
 
     const scoped = findScopedSymbolAt(current.scopedSymbols, ref, position);
-    if (scoped) return resultFromCandidates([scoped]);
+    if (scoped) return this.resultFromCandidates([scoped]);
 
     const moduleCandidates = this.visibleModuleSymbolCandidates(current, ref);
     if (moduleCandidates.length > 0) {
-      return resultFromCandidates(moduleCandidates);
+      return this.resultFromCandidates(moduleCandidates);
     }
 
-    return resultFromCandidates(
+    return this.resultFromCandidates(
       this.visibleUnqualifiedNestedCandidates(current, ref),
     );
   }
@@ -1005,7 +1026,7 @@ export class ProjectIndex {
       ? this.qualifiedSymbolCandidates(current, typeName)
       : this.visibleModuleSymbolCandidates(current, typeName);
 
-    return resultFromCandidates(
+    return this.resultFromCandidates(
       candidates.filter((symbol) => symbol.kind === SymbolKind.TypeParameter),
     ).selected?.returnType;
   }
@@ -1094,7 +1115,7 @@ export class ProjectIndex {
     typeName: string,
     position: Position,
   ): C3Symbol | undefined {
-    return resultFromCandidates(
+    return this.resultFromCandidates(
       this.typeSymbolCandidates(current, typeName, position).filter(
         isConcreteTypeSymbol,
       ),
@@ -1257,6 +1278,8 @@ export class ProjectIndex {
   }
 
   private addParsedToModule(parsed: ParsedDocument): void {
+    if (!this.shouldIndexParsed(parsed)) return;
+
     let mod = this.modulesByName.get(parsed.moduleName);
 
     if (!mod) {
@@ -1289,6 +1312,14 @@ export class ProjectIndex {
 
       addSymbolRecursive(mod.allSymbols, sym);
     }
+  }
+
+  private shouldIndexParsed(parsed: ParsedDocument): boolean {
+    return parsedIsActiveInEnvironment(parsed, this.activeEnvironment);
+  }
+
+  private resultFromCandidates(candidates: C3Symbol[]): ResolveResult {
+    return resultFromCandidates(candidates);
   }
 
   private addReferenceLocation(

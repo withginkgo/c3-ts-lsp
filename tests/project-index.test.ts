@@ -250,6 +250,71 @@ test('ProjectIndex resolves implicitly imported std::core symbols', () => {
   );
 });
 
+test('ProjectIndex ignores inactive stdlib module @if branches', () => {
+  const index = new ProjectIndex({ activeEnvironment: ['LINUX'] });
+  const appUri = 'file:///workspace/app.c3';
+  const appSource = [
+    'module app;',
+    'import std::net;',
+    'struct EventLoop {',
+    '    NativeSocket socket;',
+    '}',
+    '',
+  ].join('\n');
+  const doc = TextDocument.create(appUri, 'c3', 1, appSource);
+
+  index.upsert(parseSource(appUri, appSource), false);
+  index.upsert(
+    parseSource(
+      'file:///stdlib/std/net/socket.c3',
+      [
+        'module std::net;',
+        'import std::net::os;',
+        'struct Socket {',
+        '    NativeSocket sock;',
+        '}',
+        '',
+      ].join('\n'),
+      { sourceKind: 'stdlib' },
+    ),
+    false,
+  );
+  index.upsert(
+    parseSource(
+      'file:///stdlib/std/net/os/posix.c3',
+      [
+        'module std::net::os @if(env::POSIX && SUPPORTS_INET);',
+        'typedef NativeSocket = inline Fd;',
+        '',
+      ].join('\n'),
+      { sourceKind: 'stdlib' },
+    ),
+    false,
+  );
+  index.upsert(
+    parseSource(
+      'file:///stdlib/std/net/os/win32.c3',
+      [
+        'module std::net::os @if(env::WIN32);',
+        'typedef NativeSocket = inline Win32_SOCKET;',
+        '',
+      ].join('\n'),
+      { sourceKind: 'stdlib' },
+    ),
+    false,
+  );
+  index.rebuild();
+
+  const result = index.resolveTypeName(
+    appUri,
+    'NativeSocket',
+    doc.positionAt(appSource.indexOf('NativeSocket')),
+  );
+
+  assert.equal(result.reason, 'resolved');
+  assert.equal(result.selected?.uri, 'file:///stdlib/std/net/os/posix.c3');
+});
+
 test('ProjectIndex filters private imported symbols', () => {
   const index = new ProjectIndex();
   const appUri = 'file:///workspace/app.c3';

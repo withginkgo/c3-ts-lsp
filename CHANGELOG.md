@@ -70,6 +70,9 @@ All notable project changes are recorded here.
   changes.
 - Made standard library files participate in resolution without publishing
   diagnostics for those read-only files.
+- Made the project index honor conservative `module ... @if(env::...)`
+  conditions, so inactive standard-library platform branches do not create
+  ambiguous symbols such as `NativeSocket` from both POSIX and Win32 modules.
 - Made hover, definition, diagnostics, and references distinguish struct
   members from unrelated top-level symbols.
 - Made member completions use the receiver expression before the cursor, so
@@ -102,6 +105,8 @@ All notable project changes are recorded here.
 
 ### Fixed
 
+- Fixed unresolved diagnostics for local `const` declarations used inside
+  compile-time assertions and other expressions.
 - Recovered top-level callable symbols from parser-error regions so newer C3
   standard-library macros such as `io::printn` remain resolvable.
 - Fixed unresolved diagnostics for `self.member` inside C3 type methods.

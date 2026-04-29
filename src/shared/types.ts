@@ -69,6 +69,7 @@ export type ParsedDocument = {
   symbols: C3Symbol[];
   scopedSymbols: C3Symbol[];
   moduleName: string;
+  moduleAttributes: string[];
   imports: string[];
   importSpecs: C3Import[];
   moduleAliases: C3ModuleAlias[];

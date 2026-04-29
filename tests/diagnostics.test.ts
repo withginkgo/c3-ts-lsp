@@ -101,6 +101,27 @@ test('semanticDiagnostics reports unresolved expression symbols', () => {
   );
 });
 
+test('semanticDiagnostics resolves local consts in compile-time asserts', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'fn int main(String[] args) {',
+      '    const Y=1;',
+      '    $assert(Y==1):"int should be 4 bytes";',
+      '    return 0;',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(semanticDiagnostics(index, parsed), []);
+});
+
 test('semanticDiagnostics accepts implicitly imported std::core symbols', () => {
   const index = new ProjectIndex();
   const app = parseSource(
@@ -973,6 +994,58 @@ test('semanticDiagnostics accepts recovered stdlib receiver methods on generic s
   );
 
   for (const parsed of [registry, app, map, list, net, netOs]) {
+    index.upsert(parsed, false);
+  }
+  index.rebuild();
+
+  assert.deepEqual(semanticDiagnostics(index, app), []);
+});
+
+test('semanticDiagnostics ignores inactive stdlib platform type candidates', () => {
+  const index = new ProjectIndex({ activeEnvironment: ['LINUX'] });
+  const app = parseSource(
+    'file:///workspace/event_loop.c3',
+    [
+      'module poll_demo;',
+      'import std::net;',
+      'import std::collections::map;',
+      'struct Handlers {}',
+      'struct EventLoop {',
+      '    HashMap{NativeSocket, Handlers} handlers;',
+      '}',
+      '',
+    ].join('\n'),
+  );
+  const map = parseSource(
+    'file:///stdlib/std/collections/hashmap.c3',
+    ['module std::collections::map;', 'struct HashMap {}', ''].join('\n'),
+    { sourceKind: 'stdlib' },
+  );
+  const net = parseSource(
+    'file:///stdlib/std/net/socket.c3',
+    ['module std::net;', 'import std::net::os;', ''].join('\n'),
+    { sourceKind: 'stdlib' },
+  );
+  const posix = parseSource(
+    'file:///stdlib/std/net/os/posix.c3',
+    [
+      'module std::net::os @if(env::POSIX && SUPPORTS_INET);',
+      'typedef NativeSocket = inline Fd;',
+      '',
+    ].join('\n'),
+    { sourceKind: 'stdlib' },
+  );
+  const win32 = parseSource(
+    'file:///stdlib/std/net/os/win32.c3',
+    [
+      'module std::net::os @if(env::WIN32);',
+      'typedef NativeSocket = inline Win32_SOCKET;',
+      '',
+    ].join('\n'),
+    { sourceKind: 'stdlib' },
+  );
+
+  for (const parsed of [app, map, net, posix, win32]) {
     index.upsert(parsed, false);
   }
   index.rebuild();
