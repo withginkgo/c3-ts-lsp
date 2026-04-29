@@ -2,8 +2,12 @@ import { Range } from 'vscode-languageserver/node.js';
 import type { SyntaxNode } from 'tree-sitter';
 
 import type { ProjectIndex } from '../project/project-index.js';
+import { callArguments, callTargetFor } from '../shared/calls.js';
 import {
+  isOptionalTypeName,
+  nonOptionalTypeName,
   normalizeTypeName,
+  optionalTypeName,
   terminalTypeName,
   typeNamesCompatible,
 } from '../shared/type-ref.js';
@@ -23,18 +27,64 @@ export function expressionTypeName(
       : undefined;
   }
 
-  if (expression.type === 'binary_expr') {
-    if (isBooleanBinaryExpression(expression)) return 'bool';
+  if (expression.type === 'paren_expr') {
+    return expression.namedChildren[0]
+      ? expressionTypeName(index, parsed, expression.namedChildren[0]!)
+      : undefined;
+  }
 
+  if (expression.type === 'call_expr') {
+    return callExpressionTypeName(index, parsed, expression);
+  }
+
+  if (expression.type === 'rethrow_expr') {
+    const value = expression.namedChildren[0];
+    const typeName = value
+      ? expressionTypeName(index, parsed, value)
+      : undefined;
+    return typeName ? nonOptionalTypeName(typeName) : undefined;
+  }
+
+  if (expression.type === 'elvis_orelse_expr') {
+    return orelseExpressionTypeName(index, parsed, expression);
+  }
+
+  if (expression.type === 'optional_expr') {
+    const value = expression.namedChildren[0];
+    const typeName = value
+      ? expressionTypeName(index, parsed, value)
+      : undefined;
+    if (!typeName) return undefined;
+
+    return expression.text.trim().endsWith('~!')
+      ? nonOptionalTypeName(typeName)
+      : optionalTypeName(typeName);
+  }
+
+  if (expression.type === 'binary_expr') {
     const left =
       expression.childForFieldName('left') ?? expression.namedChildren[0];
     const right =
       expression.childForFieldName('right') ?? expression.namedChildren.at(-1);
+    const leftType = left ? expressionTypeName(index, parsed, left) : undefined;
+    const rightType = right
+      ? expressionTypeName(index, parsed, right)
+      : undefined;
 
-    return (
-      (left ? expressionTypeName(index, parsed, left) : undefined) ??
-      (right ? expressionTypeName(index, parsed, right) : undefined)
-    );
+    if (isBooleanBinaryExpression(expression)) {
+      return leftType && isOptionalTypeName(leftType)
+        ? 'bool?'
+        : rightType && isOptionalTypeName(rightType)
+          ? 'bool?'
+          : 'bool';
+    }
+
+    const typeName = leftType ?? rightType;
+    if (!typeName) return undefined;
+
+    return isOptionalTypeName(leftType) || isOptionalTypeName(rightType)
+      ? optionalTypeName(typeName)
+      : typeName;
   }
 
   if (expression.type === 'assignment_expr') {
@@ -90,6 +140,29 @@ export function shouldReportTypeMismatch(
   expectedType: string,
   expression?: SyntaxNode,
 ): boolean {
+  if (isOptionalTypeName(actualType) && !isOptionalTypeName(expectedType)) {
+    return true;
+  }
+
+  if (
+    !isOptionalTypeName(actualType) &&
+    isOptionalTypeName(expectedType) &&
+    typeNamesCompatible(actualType, nonOptionalTypeName(expectedType))
+  ) {
+    return false;
+  }
+
+  if (
+    isOptionalTypeName(actualType) &&
+    isOptionalTypeName(expectedType) &&
+    typeNamesCompatible(
+      nonOptionalTypeName(actualType),
+      nonOptionalTypeName(expectedType),
+    )
+  ) {
+    return false;
+  }
+
   if (typeNamesCompatible(actualType, expectedType)) return false;
 
   const actual = comparableTypeCategory(actualType, expression);
@@ -128,7 +201,25 @@ export function comparableTypeCategory(
 }
 
 export function isBoolType(typeName: string | undefined): boolean {
-  return normalizeTypeName(typeName ?? '') === 'bool';
+  return (
+    !isOptionalTypeName(typeName) &&
+    normalizeTypeName(typeName ?? '') === 'bool'
+  );
+}
+
+export function canPassArgumentType(
+  actualType: string,
+  expectedType: string,
+): boolean {
+  if (
+    isOptionalTypeName(actualType) &&
+    !isOptionalTypeName(expectedType) &&
+    typeNamesCompatible(nonOptionalTypeName(actualType), expectedType)
+  ) {
+    return true;
+  }
+
+  return !shouldReportTypeMismatch(actualType, expectedType);
 }
 
 export function rangeFromNode(node: SyntaxNode): Range {
@@ -142,6 +233,66 @@ export function rangeFromNode(node: SyntaxNode): Range {
 
 function isBooleanBinaryExpression(expression: SyntaxNode): boolean {
   return /(?:&&|\|\||==|!=|<=|>=|<|>)/.test(expression.text);
+}
+
+function callExpressionTypeName(
+  index: ProjectIndex,
+  parsed: ParsedDocument,
+  expression: SyntaxNode,
+): string | undefined {
+  const functionNode = expression.childForFieldName('function');
+  if (!functionNode) return undefined;
+
+  const target = callTargetFor(functionNode);
+  const resolved = target
+    ? index.resolveSymbol(parsed.uri, target.ref, target.position).selected
+    : undefined;
+  const returnType =
+    resolved?.returnType ??
+    index.typeNameForExpression(
+      parsed.uri,
+      expression.text,
+      rangeFromNode(expression).start,
+    );
+
+  if (!returnType) return undefined;
+  if (isOptionalTypeName(returnType)) return returnType;
+
+  return callArguments(expression).some((arg) => {
+    const value = callArgumentValueNode(arg.node);
+    const typeName = value
+      ? expressionTypeName(index, parsed, value)
+      : undefined;
+    return isOptionalTypeName(typeName);
+  })
+    ? optionalTypeName(returnType)
+    : returnType;
+}
+
+function orelseExpressionTypeName(
+  index: ProjectIndex,
+  parsed: ParsedDocument,
+  expression: SyntaxNode,
+): string | undefined {
+  const condition =
+    expression.childForFieldName('condition') ?? expression.namedChildren[0];
+  if (!condition) return undefined;
+
+  const conditionType = expressionTypeName(index, parsed, condition);
+  if (!conditionType) return undefined;
+
+  const fallback =
+    expression.childForFieldName('right') ?? expression.namedChildren.at(-1);
+  const fallbackType =
+    fallback && fallback.startIndex !== condition.startIndex
+      ? expressionTypeName(index, parsed, fallback)
+      : undefined;
+
+  if (fallbackType && isOptionalTypeName(fallbackType)) {
+    return optionalTypeName(conditionType);
+  }
+
+  return nonOptionalTypeName(conditionType);
 }
 
 const integerTypeNames = new Set([

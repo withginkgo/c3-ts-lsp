@@ -26,6 +26,10 @@ All notable project changes are recorded here.
   references, duplicate declarations/members/parameters/locals, missing
   interface method implementations, obvious call argument type mismatches,
   initializer/assignment type mismatches, and non-boolean conditions.
+- Added optional-result semantic diagnostics for discarded optional calls,
+  optional-to-non-optional return/initializer/assignment flows, optional
+  arguments that make a discarded call result optional, invalid `void?`
+  variables, optional `main` returns, and discarded `@nodiscard` calls.
 - Added member access resolution for struct members, including pointer-like
   receiver types.
 - Added basic expression type inference for chained members, call return values,
@@ -85,6 +89,9 @@ All notable project changes are recorded here.
 - Split reusable expression type inference and mismatch checks out of return
   diagnostics so semantic diagnostics share one conservative type-analysis
   path.
+- Made expression type inference preserve outer optional markers, unwrap common
+  `!`, `!!`, and `??` flows, and propagate optional arguments through call
+  result types.
 - Renamed the package from the template placeholder to `c3-ts-lsp`.
 - Split server capability declarations and environment/path resolution out of
   the LSP entrypoint.
@@ -100,6 +107,8 @@ All notable project changes are recorded here.
 - Fixed unresolved diagnostics for recovered stdlib receiver methods used
   through generic fields, including `self.handlers.set(...)`,
   `self.polls.push(...)`, and `sock.sock.set_non_blocking(...)`.
+- Fixed attributes on top-level function declarations so declaration-only
+  callables honor annotations such as `@maydiscard`.
 
 ## [0.2.0] - 2026-04-25
 

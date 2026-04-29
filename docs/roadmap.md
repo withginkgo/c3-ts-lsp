@@ -42,6 +42,9 @@ The server currently provides a working prototype:
   declaration completions, e.g. `struct Baz(MyName)` suggesting `myname`.
 - Type inference for `??` orelse expressions used by common unwrap/fallback
   flows.
+- Conservative optional-result inference for direct optional returns, `!`/`!!`
+  unwraps, common `??` fallback flows, and calls whose optional arguments make
+  the call result optional.
 - Default-parameter signatures and ambiguous duplicate symbol handling that
   match C3's non-overloaded function and method model.
 - Callable parameter metadata for default, named, variadic, and method receiver
@@ -67,6 +70,9 @@ The server currently provides a working prototype:
 - Semantic diagnostics for unresolved type references, missing interface method
   implementations, obvious call argument type mismatches, initializer and
   assignment type mismatches, and non-boolean conditions.
+- Semantic diagnostics for discarded optional call results, optional values
+  assigned or returned into non-optional slots, invalid `void?` variables,
+  optional `main` returns, and discarded `@nodiscard` call results.
 - Declaration-side diagnostics for duplicate function, type method, type,
   member, parameter, and local declarations.
 - Optional compiler-backed diagnostics through configured `c3c --lsp` output,

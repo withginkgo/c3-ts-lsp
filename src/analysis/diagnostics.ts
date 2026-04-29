@@ -24,9 +24,9 @@ import {
   typeReferenceDiagnostics,
 } from './semantic-diagnostics.js';
 import {
+  canPassArgumentType,
   callArgumentValueNode,
   expressionTypeName,
-  shouldReportTypeMismatch,
 } from './type-analysis.js';
 
 const diagnosticSource = 'c3-lsp';
@@ -361,10 +361,7 @@ function pushArgumentTypeDiagnostic(
   if (!value) return;
 
   const actualType = expressionTypeName(index, parsed, value);
-  if (
-    !actualType ||
-    !shouldReportTypeMismatch(actualType, parameter.type, value)
-  ) {
+  if (!actualType || canPassArgumentType(actualType, parameter.type)) {
     return;
   }
 

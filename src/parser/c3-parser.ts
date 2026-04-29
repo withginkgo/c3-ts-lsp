@@ -414,6 +414,7 @@ function functionSymbol(
     returnType: header?.childForFieldName('return_type')?.text,
     receiverType,
     signature: callableSignature(node, 'func_header', 'func_param_list'),
+    attributes: attributesFor(node),
   });
 }
 

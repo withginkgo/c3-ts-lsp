@@ -486,6 +486,121 @@ test('semanticDiagnostics accepts complete return paths and void-like returns', 
   assert.deepEqual(semanticDiagnostics(index, parsed), []);
 });
 
+test('semanticDiagnostics reports discarded optional call results', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'struct TcpServerSocket {}',
+      'enum SocketOption : int {',
+      '    REUSEADDR,',
+      '}',
+      'fn void? TcpServerSocket.set_option(&self, SocketOption option, bool enabled);',
+      'fn void run(TcpServerSocket listener) {',
+      '    listener.set_option(SocketOption.REUSEADDR, true);',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(
+    semanticDiagnostics(index, parsed).map((diagnostic) => diagnostic.message),
+    ["Optional result of 'set_option' must be handled"],
+  );
+});
+
+test('semanticDiagnostics accepts handled optional call results and may-discard calls', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'fn void? may_fail();',
+      'fn void? may_ignore() @maydiscard;',
+      'macro void unreachable(String message = "failed", ...) @noreturn {',
+      '}',
+      'fn void run() {',
+      '    may_fail()!;',
+      '    may_fail()!!;',
+      '    may_fail() ?? unreachable("failed");',
+      '    if (catch err = may_fail()) {',
+      '    }',
+      '    may_ignore();',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(semanticDiagnostics(index, parsed), []);
+});
+
+test('semanticDiagnostics validates optional type flow', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'fn int? maybe_int();',
+      'fn void consume(int value) {}',
+      'fn int unwrap_bad() {',
+      '    return maybe_int();',
+      '}',
+      'fn void run() {',
+      '    int plain = maybe_int();',
+      '    int forced = maybe_int()!;',
+      '    int fallback = maybe_int() ?? 0;',
+      '    int? optional = 1;',
+      '    void? stored = consume(1);',
+      '    consume(maybe_int());',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(
+    semanticDiagnostics(index, parsed).map((diagnostic) => diagnostic.message),
+    [
+      "Cannot declare 'stored' with type 'void?'",
+      "Cannot return 'int?' from 'unwrap_bad' with return type 'int'",
+      "Cannot initialize 'plain' of type 'int' with 'int?'",
+      "Optional result of 'consume' must be handled",
+    ],
+  );
+});
+
+test('semanticDiagnostics reports discarded nodiscard call results', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'fn int must_use() @nodiscard;',
+      'fn void run() {',
+      '    must_use();',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(
+    semanticDiagnostics(index, parsed).map((diagnostic) => diagnostic.message),
+    ["Result of 'must_use' is annotated @nodiscard and must be used"],
+  );
+});
+
 test('semanticDiagnostics accepts implemented interface method calls with arguments', () => {
   const index = new ProjectIndex();
   const uri = 'file:///workspace/app.c3';
@@ -502,6 +617,27 @@ test('semanticDiagnostics accepts implemented interface method calls with argume
       '}',
       'fn void use(Baz baz) {',
       '    baz.rename("ok");',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(semanticDiagnostics(index, parsed), []);
+});
+
+test('semanticDiagnostics accepts optional interface methods without implementations', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'interface Renamable {',
+      '    fn void rename(String name) @optional;',
+      '}',
+      'struct Baz(Renamable) {',
       '}',
       '',
     ].join('\n'),

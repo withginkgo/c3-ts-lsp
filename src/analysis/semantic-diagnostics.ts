@@ -8,7 +8,12 @@ import type { SyntaxNode } from 'tree-sitter';
 
 import type { ProjectIndex } from '../project/project-index.js';
 import { callableParameters, isCallableSymbol } from '../shared/callable.js';
-import { terminalTypeName, typeNamesCompatible } from '../shared/type-ref.js';
+import { callTargetFor } from '../shared/calls.js';
+import {
+  isOptionalTypeName,
+  terminalTypeName,
+  typeNamesCompatible,
+} from '../shared/type-ref.js';
 import type { C3Parameter, C3Symbol, ParsedDocument } from '../shared/types.js';
 import {
   expressionTypeName,
@@ -70,6 +75,8 @@ export function declarationDiagnostics(
     ...duplicateMemberDiagnostics(parsed),
     ...duplicateParameterDiagnostics(parsed),
     ...duplicateLocalDeclarationDiagnostics(parsed),
+    ...invalidOptionalDeclarationDiagnostics(parsed),
+    ...entryPointDiagnostics(parsed),
   ].sort((a, b) => compareRanges(a.range, b.range));
 }
 
@@ -81,6 +88,7 @@ export function expressionDiagnostics(
     ...initializerDiagnostics(index, parsed),
     ...assignmentDiagnostics(index, parsed),
     ...conditionDiagnostics(index, parsed),
+    ...discardedCallResultDiagnostics(index, parsed),
   ].sort((a, b) => compareRanges(a.range, b.range));
 }
 
@@ -103,6 +111,8 @@ export function interfaceImplementationDiagnostics(
       if (!resolved || resolved.kind !== SymbolKind.Interface) continue;
 
       for (const requirement of resolved.children.filter(isCallableSymbol)) {
+        if (hasAttribute(requirement, '@optional')) continue;
+
         if (
           hasConcreteInterfaceImplementation(index, parsed, symbol, requirement)
         ) {
@@ -223,6 +233,48 @@ function duplicateLocalDeclarationDiagnostics(
   return diagnostics;
 }
 
+function invalidOptionalDeclarationDiagnostics(
+  parsed: ParsedDocument,
+): Diagnostic[] {
+  const diagnostics: Diagnostic[] = [];
+
+  for (const declaration of declarationNodes(parsed.tree.rootNode)) {
+    const type = declaration.childForFieldName('type');
+    if (!type || !isPlainVoidOptionalType(type.text)) continue;
+
+    const name = declaration.childForFieldName('name')?.text ?? 'declaration';
+
+    diagnostics.push({
+      severity: DiagnosticSeverity.Error,
+      range: rangeFromNode(type),
+      message: `Cannot declare '${name}' with type 'void?'`,
+      source: diagnosticSource,
+    });
+  }
+
+  return diagnostics;
+}
+
+function entryPointDiagnostics(parsed: ParsedDocument): Diagnostic[] {
+  const diagnostics: Diagnostic[] = [];
+
+  for (const symbol of flattenSymbols(parsed.symbols).filter(
+    isCallableSymbol,
+  )) {
+    if (symbol.name !== 'main') continue;
+    if (!isOptionalTypeName(symbol.returnType)) continue;
+
+    diagnostics.push({
+      severity: DiagnosticSeverity.Error,
+      range: symbol.selectionRange,
+      message: "Function 'main' cannot return an optional",
+      source: diagnosticSource,
+    });
+  }
+
+  return diagnostics;
+}
+
 function initializerDiagnostics(
   index: ProjectIndex,
   parsed: ParsedDocument,
@@ -305,6 +357,38 @@ function conditionDiagnostics(
       severity: DiagnosticSeverity.Error,
       range: rangeFromNode(expression),
       message: `Condition expression should be 'bool', got '${actualType}'`,
+      source: diagnosticSource,
+    });
+  }
+
+  return diagnostics;
+}
+
+function discardedCallResultDiagnostics(
+  index: ProjectIndex,
+  parsed: ParsedDocument,
+): Diagnostic[] {
+  const diagnostics: Diagnostic[] = [];
+
+  for (const statement of nodesOfType(parsed.tree.rootNode, 'expr_stmt')) {
+    const expression = statement.namedChildren[0];
+    if (!expression || !containsCallExpression(expression)) continue;
+
+    const callable = directDiscardedCallable(index, parsed, expression);
+    const actualType = expressionTypeName(index, parsed, expression);
+    const discardsOptional = isOptionalTypeName(actualType);
+    const discardsNoDiscard = callable && hasAttribute(callable, '@nodiscard');
+
+    if (discardsOptional && callable && hasAttribute(callable, '@maydiscard')) {
+      continue;
+    }
+
+    if (!discardsOptional && !discardsNoDiscard) continue;
+
+    diagnostics.push({
+      severity: DiagnosticSeverity.Error,
+      range: rangeFromNode(expression),
+      message: discardedCallResultMessage(callable, discardsOptional),
       source: diagnosticSource,
     });
   }
@@ -474,6 +558,78 @@ function isLocalDeclarationSymbol(symbol: C3Symbol): boolean {
 
 function isBuiltinTypeName(typeName: string): boolean {
   return builtinTypeNames.has(terminalTypeName(typeName));
+}
+
+function isPlainVoidOptionalType(typeName: string): boolean {
+  return /^void[!?~]$/.test(compactTypeText(typeName));
+}
+
+function compactTypeText(typeName: string): string {
+  return typeName
+    .replace(/\b(?:const|volatile)\s+/g, '')
+    .replace(/\s+/g, ' ')
+    .replace(/\s*([{},\[\]*!?~])\s*/g, '$1')
+    .trim();
+}
+
+function directDiscardedCallable(
+  index: ProjectIndex,
+  parsed: ParsedDocument,
+  expression: SyntaxNode,
+): C3Symbol | undefined {
+  const unwrapped = unwrapExpression(expression);
+  if (unwrapped.type !== 'call_expr') return undefined;
+
+  const functionNode = unwrapped.childForFieldName('function');
+  if (!functionNode) return undefined;
+
+  const target = callTargetFor(functionNode);
+  if (!target) return undefined;
+
+  const symbol = index.resolveSymbol(
+    parsed.uri,
+    target.ref,
+    target.position,
+  ).selected;
+
+  return symbol && isCallableSymbol(symbol) ? symbol : undefined;
+}
+
+function unwrapExpression(expression: SyntaxNode): SyntaxNode {
+  if (expression.type === 'paren_expr' && expression.namedChildren[0]) {
+    return unwrapExpression(expression.namedChildren[0]!);
+  }
+
+  return expression;
+}
+
+function containsCallExpression(expression: SyntaxNode): boolean {
+  if (expression.type === 'call_expr') return true;
+
+  return expression.namedChildren.some((child) =>
+    containsCallExpression(child),
+  );
+}
+
+function discardedCallResultMessage(
+  callable: C3Symbol | undefined,
+  optional: boolean,
+): string {
+  if (callable && optional) {
+    return `Optional result of '${callable.name}' must be handled`;
+  }
+
+  if (callable) {
+    return `Result of '${callable.name}' is annotated @nodiscard and must be used`;
+  }
+
+  return 'Optional expression result must be handled';
+}
+
+function hasAttribute(symbol: C3Symbol, name: string): boolean {
+  return symbol.attributes.some(
+    (attribute) => attribute.split('(')[0] === name,
+  );
 }
 
 const builtinTypeNames = new Set([

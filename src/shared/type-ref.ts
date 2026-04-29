@@ -40,6 +40,24 @@ export function normalizeTypeName(typeName: string): string {
     .trim();
 }
 
+export function isOptionalTypeName(typeName: string | undefined): boolean {
+  const text = compactTypeText(typeName ?? '');
+  if (!text) return false;
+
+  const marker = outerOptionalMarker(text);
+  return marker === '?' || marker === '~' || marker === '!';
+}
+
+export function nonOptionalTypeName(typeName: string): string {
+  return normalizeTypeName(removeOuterOptionalMarker(typeName));
+}
+
+export function optionalTypeName(typeName: string): string {
+  const base = removeOuterOptionalMarker(typeName).trim();
+  if (!base) return typeName;
+  return `${base}?`;
+}
+
 export function nominalTypeName(typeName: string): string {
   return parseTypeRef(typeName)?.nominal ?? '';
 }
@@ -84,6 +102,23 @@ function compactTypeText(typeName: string): string {
     .replace(/\s+/g, ' ')
     .replace(/\s*([{},\[\]*!?~])\s*/g, '$1')
     .trim();
+}
+
+function removeOuterOptionalMarker(typeName: string): string {
+  const text = compactTypeText(typeName);
+  if (!outerOptionalMarker(text)) return text;
+
+  return text.slice(0, -1).trim();
+}
+
+function outerOptionalMarker(typeName: string): string | undefined {
+  const text = compactTypeText(typeName);
+  if (!text) return undefined;
+
+  const marker = text.at(-1);
+  if (marker !== '?' && marker !== '~' && marker !== '!') return undefined;
+
+  return marker;
 }
 
 function outerGeneric(
