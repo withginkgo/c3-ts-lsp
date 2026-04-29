@@ -22,6 +22,10 @@ All notable project changes are recorded here.
 - Added return-flow semantic diagnostics for missing return values, unexpected
   values from `void` functions, obvious return type mismatches, and non-void
   functions that can fall through.
+- Added broader lightweight semantic diagnostics for unresolved type
+  references, duplicate declarations/members/parameters/locals, missing
+  interface method implementations, obvious call argument type mismatches,
+  initializer/assignment type mismatches, and non-boolean conditions.
 - Added member access resolution for struct members, including pointer-like
   receiver types.
 - Added basic expression type inference for chained members, call return values,
@@ -78,6 +82,9 @@ All notable project changes are recorded here.
 - Made type-method lookup follow imported module dependencies when resolving
   receiver methods such as `NativeSocket.set_non_blocking` exposed through
   `std::net`.
+- Split reusable expression type inference and mismatch checks out of return
+  diagnostics so semantic diagnostics share one conservative type-analysis
+  path.
 - Renamed the package from the template placeholder to `c3-ts-lsp`.
 - Split server capability declarations and environment/path resolution out of
   the LSP entrypoint.

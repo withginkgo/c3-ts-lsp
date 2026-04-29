@@ -64,8 +64,11 @@ The server currently provides a working prototype:
   that can fall through.
 - Semantic diagnostics for missing required call arguments, too many positional
   arguments, unknown named arguments, and duplicate supplied arguments.
-- Declaration-side diagnostics for duplicate function and type method
-  declarations.
+- Semantic diagnostics for unresolved type references, missing interface method
+  implementations, obvious call argument type mismatches, initializer and
+  assignment type mismatches, and non-boolean conditions.
+- Declaration-side diagnostics for duplicate function, type method, type,
+  member, parameter, and local declarations.
 - Optional compiler-backed diagnostics through configured `c3c --lsp` output,
   debounced with stale-run protection.
 - Standard library files participate in resolution but do not publish
@@ -77,9 +80,9 @@ The server currently provides a working prototype:
 
 The implementation is still intentionally lightweight. It has project/module
 resolution, basic scoped local lookup, simple member type analysis, callable
-parameter awareness, and the core daily editing LSP surface. It does not yet
-model full C3 type relationships, implicit conversions, broad compiler-backed
-analysis, or editor packaging.
+parameter awareness, conservative expression type checks, and the core daily
+editing LSP surface. It does not yet model full C3 type relationships,
+implicit conversions, broad compiler-backed analysis, or editor packaging.
 
 ## Target Architecture
 
@@ -192,7 +195,9 @@ Goal: make the server useful during editing, not only navigation.
 
 - Publish syntax diagnostics from tree-sitter parse errors.
 - Publish semantic diagnostics for unresolved imports, unresolved symbols,
-  duplicate declarations, ambiguous references, and invalid member access.
+  unresolved types, duplicate declarations, ambiguous references, invalid member
+  access, call argument errors, obvious type mismatches, non-boolean
+  conditions, missing returns, and missing interface implementations.
 - Optionally integrate `c3c` diagnostics when a compiler executable is
   configured. Done for `c3c --lsp` diagnostic output.
 - Debounce diagnostics and avoid publishing stale results. Done for compiler

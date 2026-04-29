@@ -164,6 +164,19 @@ export class ProjectIndex {
     return this.expressionTypeNameFromText(current, expressionText, position);
   }
 
+  resolveTypeName(
+    currentUri: string,
+    typeName: string,
+    position: Position,
+  ): ResolveResult {
+    const current = this.parsedByUri.get(currentUri);
+    if (!current) return { candidates: [], reason: 'not_found' };
+
+    return resultFromCandidates(
+      this.typeSymbolCandidates(current, nominalTypeName(typeName), position),
+    );
+  }
+
   importCandidatesForSymbol(
     current: ParsedDocument,
     ref: string,
@@ -1081,13 +1094,42 @@ export class ProjectIndex {
     typeName: string,
     position: Position,
   ): C3Symbol | undefined {
+    return resultFromCandidates(
+      this.typeSymbolCandidates(current, typeName, position).filter(
+        isConcreteTypeSymbol,
+      ),
+    ).selected;
+  }
+
+  private typeSymbolCandidates(
+    current: ParsedDocument,
+    typeName: string,
+    _position: Position,
+  ): C3Symbol[] {
+    if (!typeName) return [];
+
     const candidates = typeName.includes('::')
       ? this.qualifiedSymbolCandidates(current, typeName)
-      : this.visibleModuleSymbolCandidates(current, typeName);
+      : [
+          ...this.visibleModuleSymbolCandidates(current, typeName),
+          ...this.visibleSymbolsForMemberLookup(current).filter(
+            (symbol) => symbol.name === typeName,
+          ),
+        ];
 
-    return resultFromCandidates(
-      candidates.filter((symbol) => isTypeSymbol(symbol)),
-    ).selected;
+    const typeSymbols = candidates.filter((symbol) =>
+      isTypeReferenceSymbol(symbol),
+    );
+
+    if (typeSymbols.length > 0) return uniqueSymbols(typeSymbols);
+
+    return this.visibleSymbolsForMemberLookup(current)
+      .filter(
+        (symbol) =>
+          symbol.kind === SymbolKind.Method &&
+          receiverTypeMatches(symbol.receiverType, typeName, undefined),
+      )
+      .slice(0, 1);
   }
 
   private visibleSymbolsForMemberLookup(current: ParsedDocument): C3Symbol[] {
@@ -2162,6 +2204,14 @@ function isTypeSymbol(symbol: C3Symbol): boolean {
     symbol.kind === SymbolKind.Interface ||
     isConstdefSymbol(symbol)
   );
+}
+
+function isConcreteTypeSymbol(symbol: C3Symbol): boolean {
+  return isTypeSymbol(symbol);
+}
+
+function isTypeReferenceSymbol(symbol: C3Symbol): boolean {
+  return isTypeSymbol(symbol) || symbol.kind === SymbolKind.TypeParameter;
 }
 
 function isConstdefSymbol(symbol: C3Symbol): boolean {

@@ -498,6 +498,8 @@ test('semanticDiagnostics accepts implemented interface method calls with argume
       '}',
       'struct Baz(Renamable) {',
       '}',
+      'fn void Baz.rename(&self, String new_name) @dynamic {',
+      '}',
       'fn void use(Baz baz) {',
       '    baz.rename("ok");',
       '}',
@@ -508,6 +510,108 @@ test('semanticDiagnostics accepts implemented interface method calls with argume
   index.upsert(parsed);
 
   assert.deepEqual(semanticDiagnostics(index, parsed), []);
+});
+
+test('semanticDiagnostics reports unresolved types and duplicate declarations', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'struct Box {',
+      '    int value;',
+      '    int value;',
+      '}',
+      'struct Box {}',
+      'fn void use(Missing value) {',
+      '    int local;',
+      '    int local;',
+      '}',
+      'fn void take(int value, String value) {}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(
+    semanticDiagnostics(index, parsed)
+      .map((diagnostic) => diagnostic.message)
+      .sort(),
+    [
+      "Duplicate declaration 'Box'",
+      "Duplicate declaration 'Box'",
+      "Duplicate local declaration 'local'",
+      "Duplicate local declaration 'local'",
+      "Duplicate member 'value' in 'Box'",
+      "Duplicate member 'value' in 'Box'",
+      "Duplicate parameter 'value' in 'take'",
+      "Duplicate parameter 'value' in 'take'",
+      "Unresolved type 'Missing'",
+    ].sort(),
+  );
+});
+
+test('semanticDiagnostics validates call arguments, initializers, assignments, and conditions', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'fn void connect(String host, int port) {}',
+      'fn void use(int count) {',
+      '    String name = 1;',
+      '    int number = "bad";',
+      '    if (count) {',
+      '    }',
+      '    name = 2;',
+      '    count = "bad";',
+      '    connect(1, "bad");',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(
+    semanticDiagnostics(index, parsed).map((diagnostic) => diagnostic.message),
+    [
+      "Cannot pass 'int' to parameter 'host' of 'connect' with type 'String'",
+      "Cannot pass 'String' to parameter 'port' of 'connect' with type 'int'",
+      "Cannot initialize 'name' of type 'String' with 'int'",
+      "Cannot initialize 'number' of type 'int' with 'String'",
+      "Condition expression should be 'bool', got 'int'",
+      "Cannot assign 'int' to 'name' of type 'String'",
+      "Cannot assign 'String' to 'count' of type 'int'",
+    ],
+  );
+});
+
+test('semanticDiagnostics reports missing interface method implementations', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'interface Renamable {',
+      '    fn void rename(String name);',
+      '}',
+      'struct Baz(Renamable) {',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(
+    semanticDiagnostics(index, parsed).map((diagnostic) => diagnostic.message),
+    ["Type 'Baz' does not implement interface method 'Renamable.rename'"],
+  );
 });
 
 test('semanticDiagnostics accepts generic receiver methods on self fields', () => {

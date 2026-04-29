@@ -8,12 +8,13 @@ import type { SyntaxNode } from 'tree-sitter';
 
 import type { ProjectIndex } from '../project/project-index.js';
 import { isCallableSymbol } from '../shared/callable.js';
-import {
-  normalizeTypeName,
-  terminalTypeName,
-  typeNamesCompatible,
-} from '../shared/type-ref.js';
+import { normalizeTypeName } from '../shared/type-ref.js';
 import type { C3Symbol, ParsedDocument } from '../shared/types.js';
+import {
+  expressionTypeName,
+  rangeFromNode,
+  shouldReportTypeMismatch,
+} from './type-analysis.js';
 
 const diagnosticSource = 'c3-lsp';
 
@@ -73,11 +74,11 @@ function returnStatementDiagnostics(
 
     if (!requiresValue || !expression) continue;
 
-    const actualType = returnExpressionTypeName(index, parsed, expression);
+    const actualType = expressionTypeName(index, parsed, expression);
 
     if (
       actualType &&
-      shouldReportReturnTypeMismatch(actualType, returnType, expression)
+      shouldReportTypeMismatch(actualType, returnType, expression)
     ) {
       diagnostics.push({
         severity: DiagnosticSeverity.Error,
@@ -168,106 +169,6 @@ function isPlainVoidType(returnType: string): boolean {
   return returnType.replace(/\s+/g, '') === 'void';
 }
 
-function shouldReportReturnTypeMismatch(
-  actualType: string,
-  expectedType: string,
-  expression: SyntaxNode,
-): boolean {
-  if (typeNamesCompatible(actualType, expectedType)) return false;
-
-  const actual = comparableTypeCategory(actualType, expression);
-  const expected = comparableTypeCategory(expectedType);
-
-  return !!actual && !!expected && actual !== expected;
-}
-
-function returnExpressionTypeName(
-  index: ProjectIndex,
-  parsed: ParsedDocument,
-  expression: SyntaxNode,
-): string | undefined {
-  return (
-    literalTypeName(expression) ??
-    index.typeNameForExpression(
-      parsed.uri,
-      expression.text,
-      rangeFromNode(expression).start,
-    )
-  );
-}
-
-function literalTypeName(node: SyntaxNode): string | undefined {
-  switch (node.type) {
-    case 'integer_literal':
-      return 'int';
-    case 'real_literal':
-      return 'float';
-    case 'char_literal':
-      return 'char';
-    case 'string_literal':
-      return 'String';
-    case 'true':
-    case 'false':
-    case 'boolean_literal':
-      return 'bool';
-    default:
-      return undefined;
-  }
-}
-
-function comparableTypeCategory(
-  typeName: string,
-  expression?: SyntaxNode,
-): string | undefined {
-  const terminal = terminalTypeName(typeName);
-
-  if (terminal === 'any') return undefined;
-  if (integerTypeNames.has(terminal)) return 'integer';
-  if (realTypeNames.has(terminal)) return 'real';
-  if (terminal === 'bool') return 'bool';
-  if (terminal === 'char') return 'char';
-  if (terminal === 'String') return 'string';
-
-  if (expression?.type === 'integer_literal') return 'integer';
-  if (expression?.type === 'real_literal') return 'real';
-  if (expression?.type === 'string_literal') return 'string';
-  if (expression?.type === 'char_literal') return 'char';
-  if (
-    expression?.type === 'true' ||
-    expression?.type === 'false' ||
-    expression?.type === 'boolean_literal'
-  ) {
-    return 'bool';
-  }
-
-  return undefined;
-}
-
-const integerTypeNames = new Set([
-  'char',
-  'short',
-  'int',
-  'long',
-  'ichar',
-  'ushort',
-  'uint',
-  'ulong',
-  'isz',
-  'usz',
-  'iptr',
-  'uptr',
-  'int128',
-  'uint128',
-]);
-
-const realTypeNames = new Set([
-  'float16',
-  'float',
-  'double',
-  'float128',
-  'bfloat16',
-]);
-
 function nodeAlwaysReturns(node: SyntaxNode): boolean {
   if (node.type === 'return_stmt') return true;
 
@@ -346,15 +247,6 @@ function directChildOfType(
   type: string,
 ): SyntaxNode | undefined {
   return node.namedChildren.find((child) => child.type === type);
-}
-
-function rangeFromNode(node: SyntaxNode): Range {
-  return Range.create(
-    node.startPosition.row,
-    node.startPosition.column,
-    node.endPosition.row,
-    node.endPosition.column,
-  );
 }
 
 function nonEmptyRangeFromNode(node: SyntaxNode): Range {

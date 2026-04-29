@@ -17,6 +17,17 @@ import {
 import { terminalTypeName, typeNamesCompatible } from '../shared/type-ref.js';
 import type { C3Parameter, C3Symbol, ParsedDocument } from '../shared/types.js';
 import { returnDiagnostics } from './return-diagnostics.js';
+import {
+  declarationDiagnostics,
+  expressionDiagnostics,
+  interfaceImplementationDiagnostics,
+  typeReferenceDiagnostics,
+} from './semantic-diagnostics.js';
+import {
+  callArgumentValueNode,
+  expressionTypeName,
+  shouldReportTypeMismatch,
+} from './type-analysis.js';
 
 const diagnosticSource = 'c3-lsp';
 
@@ -36,10 +47,14 @@ export function semanticDiagnostics(
   return [
     ...importDiagnostics,
     ...duplicateCallableDiagnostics(index, parsed),
+    ...declarationDiagnostics(index, parsed),
     ...methodReceiverDiagnostics(parsed),
+    ...typeReferenceDiagnostics(index, parsed),
+    ...interfaceImplementationDiagnostics(index, parsed),
     ...returnDiagnostics(index, parsed),
     ...referenceDiagnostics(index, parsed),
     ...callDiagnostics(index, parsed),
+    ...expressionDiagnostics(index, parsed),
   ];
 }
 
@@ -204,6 +219,8 @@ function callDiagnostics(
     diagnostics.push(
       ...validateCallArguments(
         symbol,
+        index,
+        parsed,
         callableParameters(symbol, { methodStyle: target.methodStyle }),
         callArguments(call),
         rangeFromNode(call),
@@ -216,6 +233,8 @@ function callDiagnostics(
 
 function validateCallArguments(
   symbol: C3Symbol,
+  index: ProjectIndex,
+  parsed: ParsedDocument,
   parameters: C3Parameter[],
   args: C3CallArgument[],
   callRange: Range,
@@ -253,6 +272,14 @@ function validateCallArguments(
       }
 
       supplied.add(namedIndex);
+      pushArgumentTypeDiagnostic(
+        symbol,
+        index,
+        parsed,
+        parameters[namedIndex]!,
+        arg,
+        diagnostics,
+      );
       continue;
     }
 
@@ -265,12 +292,28 @@ function validateCallArguments(
 
     if (variadicIndex >= 0 && positionalIndex >= variadicIndex) {
       supplied.add(variadicIndex);
+      pushArgumentTypeDiagnostic(
+        symbol,
+        index,
+        parsed,
+        parameters[variadicIndex]!,
+        arg,
+        diagnostics,
+      );
       continue;
     }
 
     if (positionalIndex < parameters.length) {
       supplied.add(positionalIndex);
       positionalCursor = positionalIndex + 1;
+      pushArgumentTypeDiagnostic(
+        symbol,
+        index,
+        parsed,
+        parameters[positionalIndex]!,
+        arg,
+        diagnostics,
+      );
     } else {
       tooManyPositional = true;
     }
@@ -302,6 +345,35 @@ function validateCallArguments(
   }
 
   return diagnostics;
+}
+
+function pushArgumentTypeDiagnostic(
+  symbol: C3Symbol,
+  index: ProjectIndex,
+  parsed: ParsedDocument,
+  parameter: C3Parameter,
+  arg: C3CallArgument,
+  diagnostics: Diagnostic[],
+): void {
+  if (!parameter.type) return;
+
+  const value = callArgumentValueNode(arg.node);
+  if (!value) return;
+
+  const actualType = expressionTypeName(index, parsed, value);
+  if (
+    !actualType ||
+    !shouldReportTypeMismatch(actualType, parameter.type, value)
+  ) {
+    return;
+  }
+
+  diagnostics.push({
+    severity: DiagnosticSeverity.Error,
+    range: rangeFromNode(value),
+    message: `Cannot pass '${actualType}' to parameter '${parameter.name ?? parameter.label}' of '${symbol.name}' with type '${parameter.type}'`,
+    source: diagnosticSource,
+  });
 }
 
 function nextPositionalIndex(
