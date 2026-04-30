@@ -1749,12 +1749,30 @@ function looksLikeExpressionInitializerContext(
   if (!before) return false;
 
   const previousChar = before.at(-1);
+  if (
+    previousChar === '{' &&
+    looksLikeAggregateBodyOpen(source, before.length - 1)
+  ) {
+    return false;
+  }
+
   if (previousChar && '=([{,:!?+-*/%&|^~<>'.includes(previousChar)) {
     return true;
   }
 
   const previousWord = before.match(/[A-Za-z_$@][A-Za-z0-9_$@]*$/)?.[0];
   return previousWord === 'return' || previousWord === 'case';
+}
+
+function looksLikeAggregateBodyOpen(
+  source: string,
+  braceOffset: number,
+): boolean {
+  const prefix = source
+    .slice(previousStatementBoundary(source, braceOffset), braceOffset)
+    .trim();
+
+  return /^(?:struct|union|enum|bitstruct|interface|constdef)\b/.test(prefix);
 }
 
 function previousStatementBoundary(source: string, offset: number): number {

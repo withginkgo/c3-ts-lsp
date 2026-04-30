@@ -409,6 +409,28 @@ test('parseSource reports invalid bare typed initializer syntax precisely', () =
   );
 });
 
+test('parseSource accepts generic field types at the start of struct bodies', () => {
+  const parsed = parseSource(
+    'file:///workspace/app.c3',
+    [
+      'module app;',
+      'struct NativeSocket {}',
+      'struct Handlers {}',
+      'struct Poll {}',
+      'struct HashMap {}',
+      'struct List {}',
+      'struct EventLoop {',
+      '    HashMap{NativeSocket, Handlers} handlers;',
+      '    List{Poll} polls;',
+      '    bool running;',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  assert.deepEqual(parsed.diagnostics, []);
+});
+
 test('parseSource reports missing semicolon after typed initializer', () => {
   const parsed = parseSource(
     'file:///workspace/app.c3',
