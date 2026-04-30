@@ -373,6 +373,68 @@ test('parseSource reports a clear missing comma diagnostic in call arguments', (
   });
 });
 
+test('parseSource reports invalid bare typed initializer syntax precisely', () => {
+  const parsed = parseSource(
+    'file:///workspace/app.c3',
+    [
+      'module app;',
+      'fn void use(Poll[] polls, usz poll_count) {',
+      '    polls[poll_count]=Poll{',
+      '        .socket=server.sock,',
+      '        .events=PollSubscribe.READ,',
+      '    }',
+      '    poll_count++;',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  assert.deepEqual(
+    parsed.diagnostics.map((diagnostic) => [
+      diagnostic.message,
+      diagnostic.source,
+      diagnostic.range.start.line,
+      diagnostic.range.start.character,
+      diagnostic.range.end.character,
+    ]),
+    [
+      [
+        "Invalid initializer syntax for 'Poll': use '(Poll){ ... }' or infer the type with '{ ... }'.",
+        'c3-lsp',
+        2,
+        22,
+        26,
+      ],
+    ],
+  );
+});
+
+test('parseSource reports missing semicolon after typed initializer', () => {
+  const parsed = parseSource(
+    'file:///workspace/app.c3',
+    [
+      'module app;',
+      'fn void use(Poll[] polls, usz poll_count) {',
+      '    polls[poll_count]=(Poll){',
+      '        .socket=server.sock,',
+      '        .events=PollSubscribe.READ,',
+      '    }',
+      '    poll_count++;',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  assert.deepEqual(
+    parsed.diagnostics.map((diagnostic) => [
+      diagnostic.message,
+      diagnostic.range.start.line,
+      diagnostic.range.start.character,
+    ]),
+    [["Missing ';'", 5, 5]],
+  );
+});
+
 test('parseSource recovers top-level callables after parser errors', () => {
   const parsed = parseSource(
     'file:///workspace/std/io.c3',

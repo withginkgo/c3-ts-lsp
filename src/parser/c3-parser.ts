@@ -1503,6 +1503,7 @@ function collectSyntaxDiagnostics(
   const sourceDiagnostics = [
     ...collectDelimiterDiagnostics(doc),
     ...collectMissingTerminatorDiagnostics(doc),
+    ...collectInvalidInitializerSyntaxDiagnostics(doc),
   ];
   const diagnostics: Diagnostic[] = [...sourceDiagnostics];
 
@@ -1533,7 +1534,11 @@ function collectSyntaxDiagnostics(
 }
 
 function syntaxDiagnosticMessage(node: SyntaxNode): string {
-  if (node.isMissing) return `Missing ${printableSyntaxNodeType(node.type)}`;
+  if (node.isMissing) {
+    if (looksLikeMissingStatementTerminator(node)) return "Missing ';'";
+
+    return `Missing ${printableSyntaxNodeType(node.type)}`;
+  }
 
   if (looksLikeMissingCallArgumentComma(node)) {
     return 'Syntax error: missing comma between call arguments';
@@ -1549,6 +1554,19 @@ function looksLikeMissingCallArgumentComma(node: SyntaxNode): boolean {
     !!node.previousNamedSibling &&
     node.nextNamedSibling?.type === 'call_arg'
   );
+}
+
+function looksLikeMissingStatementTerminator(node: SyntaxNode): boolean {
+  if (!node.isMissing || node.type !== '=') return false;
+
+  const parent = node.parent;
+  if (parent?.type !== 'assignment_expr') return false;
+
+  const previous = node.previousNamedSibling;
+  const next = node.nextNamedSibling;
+  if (!previous || !next) return false;
+
+  return previous.endPosition.row <= next.startPosition.row;
 }
 
 type OpenDelimiter = {
@@ -1649,12 +1667,109 @@ function collectMissingTerminatorDiagnostics(doc: TextDocument): Diagnostic[] {
   return diagnostics;
 }
 
+function collectInvalidInitializerSyntaxDiagnostics(
+  doc: TextDocument,
+): Diagnostic[] {
+  const source = doc.getText();
+  const diagnostics: Diagnostic[] = [];
+  const state: LexState = {};
+
+  for (let index = 0; index < source.length; index++) {
+    const char = source[index];
+
+    if (updateLexState(source, index, state)) continue;
+    if (state.lineComment || state.blockComment || state.stringQuote) continue;
+    if (char !== '{') continue;
+
+    const typeToken = pathTokenBefore(source, index);
+    if (!typeToken) continue;
+    if (looksLikeDeclarationBraceContext(source, typeToken.start)) continue;
+    if (!looksLikeExpressionInitializerContext(source, typeToken.start)) {
+      continue;
+    }
+
+    diagnostics.push(
+      syntaxDiagnostic(
+        rangeFromOffsets(doc, typeToken.start, typeToken.end),
+        invalidInitializerSyntaxMessage(typeToken.text),
+        'c3-lsp',
+      ),
+    );
+  }
+
+  return diagnostics;
+}
+
 function needsSemicolonTerminator(line: string): boolean {
   const trimmed = line.trim();
   if (!trimmed) return false;
   if (/[;{,}]$/.test(trimmed)) return false;
 
   return /^\s*(?:module|import|alias|typedef|attrdef)\b/.test(line);
+}
+
+type SourceToken = {
+  text: string;
+  start: number;
+  end: number;
+};
+
+function pathTokenBefore(source: string, offset: number): SourceToken | null {
+  const match = source
+    .slice(0, offset)
+    .match(/([A-Za-z_$@][A-Za-z0-9_$@]*(?:::[A-Za-z_$@][A-Za-z0-9_$@]*)*)\s*$/);
+  if (!match?.[1] || match.index == null) return null;
+
+  const text = match[1];
+  const start = match.index + match[0].indexOf(text);
+
+  return {
+    text,
+    start,
+    end: start + text.length,
+  };
+}
+
+function looksLikeDeclarationBraceContext(
+  source: string,
+  tokenStart: number,
+): boolean {
+  const prefix = source
+    .slice(previousStatementBoundary(source, tokenStart), tokenStart)
+    .trim();
+
+  return /^(?:struct|union|enum|bitstruct|interface|constdef)\b/.test(prefix);
+}
+
+function looksLikeExpressionInitializerContext(
+  source: string,
+  tokenStart: number,
+): boolean {
+  const before = source.slice(0, tokenStart).trimEnd();
+  if (!before) return false;
+
+  const previousChar = before.at(-1);
+  if (previousChar && '=([{,:!?+-*/%&|^~<>'.includes(previousChar)) {
+    return true;
+  }
+
+  const previousWord = before.match(/[A-Za-z_$@][A-Za-z0-9_$@]*$/)?.[0];
+  return previousWord === 'return' || previousWord === 'case';
+}
+
+function previousStatementBoundary(source: string, offset: number): number {
+  for (let index = offset - 1; index >= 0; index--) {
+    const char = source[index];
+    if (char === '\n' || char === ';' || char === '{' || char === '}') {
+      return index + 1;
+    }
+  }
+
+  return 0;
+}
+
+function invalidInitializerSyntaxMessage(typeName: string): string {
+  return `Invalid initializer syntax for '${typeName}': use '(${typeName}){ ... }' or infer the type with '{ ... }'.`;
 }
 
 function codeLengthBeforeLineComment(line: string): number {
