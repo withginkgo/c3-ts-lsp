@@ -30,7 +30,7 @@ export type CallArgumentContext = {
 };
 
 export type StructInitializerFieldCompletionContext = {
-  typeName: string;
+  typeName?: string;
   prefix: string;
   replaceRange: Range;
 };
@@ -119,11 +119,8 @@ export function structInitializerFieldBeforeCursor(
   const braceOffset = unclosedBraceBefore(text, offset);
   if (braceOffset == null) return null;
 
-  const typeName = initializerTypeBeforeBrace(text, braceOffset);
-  if (!typeName) return null;
-
   return {
-    typeName,
+    typeName: initializerTypeBeforeBrace(text, braceOffset) ?? undefined,
     prefix,
     replaceRange: {
       start: doc.positionAt(offset - prefix.length),
@@ -370,6 +367,14 @@ function initializerTypeBeforeBrace(
   braceOffset: number,
 ): string | null {
   const beforeBrace = text.slice(0, braceOffset);
+  const typedInitializer = beforeBrace.match(
+    new RegExp(`\\(\\s*(${C3_QUALIFIED_IDENTIFIER_PATTERN})\\s*\\)\\s*$`),
+  );
+
+  if (typedInitializer?.[1]) {
+    return typedInitializer[1];
+  }
+
   const match = beforeBrace.match(
     new RegExp(`(${C3_QUALIFIED_IDENTIFIER_PATTERN})\\s*$`),
   );

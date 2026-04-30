@@ -6,7 +6,9 @@ import {
   type Position,
 } from 'vscode-languageserver/node.js';
 import type { TextDocument } from 'vscode-languageserver-textdocument';
+import type { SyntaxNode } from 'tree-sitter';
 
+import { expressionTypeName } from '../analysis/type-analysis.js';
 import type { ProjectIndex } from '../project/project-index.js';
 import { callableParameters, isCallableSymbol } from '../shared/callable.js';
 import {
@@ -294,8 +296,12 @@ function structInitializerFieldCompletions(
   position: Position,
   context: StructInitializerFieldCompletionContext,
 ): CompletionItem[] {
+  const typeName =
+    context.typeName ?? expectedInitializerTypeName(index, current, position);
+  if (!typeName) return [];
+
   return index
-    .memberSymbolsForType(current.uri, context.typeName, position)
+    .memberSymbolsForType(current.uri, typeName, position)
     .filter(
       (symbol) =>
         symbol.kind === SymbolKind.Field &&
@@ -308,6 +314,73 @@ function structInitializerFieldCompletions(
         newText: symbol.name,
       },
     }));
+}
+
+function expectedInitializerTypeName(
+  index: ProjectIndex,
+  current: ParsedDocument,
+  position: Position,
+): string | undefined {
+  const initializer = initializerListAtPosition(
+    current.tree.rootNode,
+    position,
+  );
+  if (!initializer) return undefined;
+
+  const parent = initializer.parent;
+  if (!parent) return undefined;
+
+  if (parent.type === 'typed_initializer_list') {
+    return parent.childForFieldName('type')?.text;
+  }
+
+  if (parent.type === 'declaration') {
+    const right = parent.childForFieldName('right');
+    if (!right || !sameSyntaxNode(right, initializer)) return undefined;
+
+    return parent.childForFieldName('type')?.text;
+  }
+
+  if (parent.type === 'assignment_expr') {
+    const right =
+      parent.childForFieldName('right') ?? parent.namedChildren.at(-1);
+    if (!right || !sameSyntaxNode(right, initializer)) return undefined;
+
+    const left = parent.childForFieldName('left') ?? parent.namedChildren[0];
+    return left ? expressionTypeName(index, current, left) : undefined;
+  }
+
+  return undefined;
+}
+
+function initializerListAtPosition(
+  root: SyntaxNode,
+  position: Position,
+): SyntaxNode | undefined {
+  const node = root.descendantForPosition({
+    row: position.line,
+    column: Math.max(0, position.character - 1),
+  });
+
+  return ancestorOfType(node, 'initializer_list');
+}
+
+function ancestorOfType(
+  node: SyntaxNode | null,
+  type: string,
+): SyntaxNode | undefined {
+  let current = node;
+
+  while (current) {
+    if (current.type === type) return current;
+    current = current.parent;
+  }
+
+  return undefined;
+}
+
+function sameSyntaxNode(a: SyntaxNode, b: SyntaxNode): boolean {
+  return a.startIndex === b.startIndex && a.endIndex === b.endIndex;
 }
 
 function symbolCompletionItem(symbol: C3Symbol): CompletionItem {

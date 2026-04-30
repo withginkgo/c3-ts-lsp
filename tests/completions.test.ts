@@ -511,7 +511,7 @@ test('completionItems returns struct initializer fields after designator dot', (
     '}',
     'fn void socket_factory() {}',
     'fn void use(Poll[] polls, usz poll_count) {',
-    '    polls[poll_count] = Poll{',
+    '    polls[poll_count] = (Poll){',
     '        .so',
     '    };',
     '}',
@@ -539,6 +539,45 @@ test('completionItems returns struct initializer fields after designator dot', (
         : undefined,
     ]),
     [['socket', CompletionItemKind.Field, 'Socket socket;', 'socket']],
+  );
+  assert.equal(
+    items.some((item) => item.label === 'socket_factory'),
+    false,
+  );
+});
+
+test('completionItems infers struct initializer fields from assignment target', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'struct Poll {',
+    '    Socket socket;',
+    '    int events;',
+    '}',
+    'fn void socket_factory() {}',
+    'fn void use(Poll[] polls, usz poll_count) {',
+    '    polls[poll_count] = {',
+    '        .so',
+    '    };',
+    '}',
+    '',
+  ].join('\n');
+  const parsed = parseSource(uri, source);
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+
+  index.upsert(parsed);
+
+  const items = completionItems(
+    index,
+    doc,
+    parsed,
+    doc.positionAt(source.indexOf('.so') + '.so'.length),
+  );
+
+  assert.deepEqual(
+    items.map((item) => [item.label, item.kind, item.detail]),
+    [['socket', CompletionItemKind.Field, 'Socket socket;']],
   );
   assert.equal(
     items.some((item) => item.label === 'socket_factory'),
