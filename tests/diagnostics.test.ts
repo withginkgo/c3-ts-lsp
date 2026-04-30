@@ -669,7 +669,7 @@ test('semanticDiagnostics accepts handled optional call results and may-discard 
       'fn void? may_ignore() @maydiscard;',
       'macro void unreachable(String message = "failed", ...) @noreturn {',
       '}',
-      'fn void run() {',
+      'fn void? run() {',
       '    may_fail()!;',
       '    may_fail()!!;',
       '    may_fail() ?? unreachable("failed");',
@@ -686,6 +686,43 @@ test('semanticDiagnostics accepts handled optional call results and may-discard 
   assert.deepEqual(semanticDiagnostics(index, parsed), []);
 });
 
+test('semanticDiagnostics validates rethrow propagation context', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'fn int? may_fail();',
+      'fn void cleanup() {}',
+      'fn int main(String[] args) {',
+      '    int value = may_fail()!;',
+      '    int? optional = may_fail()!;',
+      '    int plain = 1;',
+      '    plain!;',
+      '    plain!!;',
+      '    defer may_fail()!;',
+      '    may_fail()!!;',
+      '    return 0;',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(
+    semanticDiagnostics(index, parsed).map((diagnostic) => diagnostic.message),
+    [
+      "This expression is doing a rethrow, but 'main' returns 'int', which isn't an optional type. Did you intend to use '!!' instead?",
+      "This expression is doing a rethrow, but 'main' returns 'int', which isn't an optional type. Since you are assigning to an optional, maybe you added '!' by mistake?",
+      "No optional to rethrow before '!' in the expression, please remove '!'.",
+      "No optional to rethrow before '!!' in the expression, please remove '!!'.",
+      'Rethrows are not allowed inside of defers.',
+    ],
+  );
+});
+
 test('semanticDiagnostics validates optional type flow', () => {
   const index = new ProjectIndex();
   const uri = 'file:///workspace/app.c3';
@@ -698,7 +735,7 @@ test('semanticDiagnostics validates optional type flow', () => {
       'fn int unwrap_bad() {',
       '    return maybe_int();',
       '}',
-      'fn void run() {',
+      'fn void? run() {',
       '    int plain = maybe_int();',
       '    int forced = maybe_int()!;',
       '    int fallback = maybe_int() ?? 0;',

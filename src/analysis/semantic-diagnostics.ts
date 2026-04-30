@@ -85,6 +85,7 @@ export function expressionDiagnostics(
   parsed: ParsedDocument,
 ): Diagnostic[] {
   return [
+    ...rethrowDiagnostics(index, parsed),
     ...initializerDiagnostics(index, parsed),
     ...assignmentDiagnostics(index, parsed),
     ...conditionDiagnostics(index, parsed),
@@ -364,6 +365,72 @@ function conditionDiagnostics(
   return diagnostics;
 }
 
+function rethrowDiagnostics(
+  index: ProjectIndex,
+  parsed: ParsedDocument,
+): Diagnostic[] {
+  const diagnostics: Diagnostic[] = [];
+
+  for (const rethrow of nodesOfType(parsed.tree.rootNode, 'rethrow_expr')) {
+    const forceUnwrap = isForceUnwrapRethrow(rethrow);
+
+    if (!forceUnwrap && ancestorOfType(rethrow, 'defer_stmt')) {
+      diagnostics.push({
+        severity: DiagnosticSeverity.Error,
+        range: rangeFromNode(rethrow),
+        message: 'Rethrows are not allowed inside of defers.',
+        source: diagnosticSource,
+      });
+      continue;
+    }
+
+    const argument =
+      rethrow.childForFieldName('argument') ?? rethrow.namedChildren[0];
+    const argumentType = argument
+      ? expressionTypeName(index, parsed, argument)
+      : undefined;
+
+    if (argumentType && !isOptionalTypeName(argumentType)) {
+      diagnostics.push({
+        severity: DiagnosticSeverity.Error,
+        range: rangeFromNode(rethrow),
+        message: noOptionalToUnwrapMessage(forceUnwrap),
+        source: diagnosticSource,
+      });
+      continue;
+    }
+
+    if (forceUnwrap) continue;
+
+    const callable = enclosingCallable(rethrow);
+    if (!callable) {
+      diagnostics.push({
+        severity: DiagnosticSeverity.Error,
+        range: rangeFromNode(rethrow),
+        message: 'Rethrow cannot be used outside of a function.',
+        source: diagnosticSource,
+      });
+      continue;
+    }
+
+    const returnType = callableReturnType(callable);
+    if (!returnType || isOptionalTypeName(returnType)) continue;
+
+    diagnostics.push({
+      severity: DiagnosticSeverity.Error,
+      range: rangeFromNode(rethrow),
+      message: rethrowInNonOptionalCallableMessage(
+        callableName(callable),
+        returnType,
+        expectedTypeForRethrow(index, parsed, rethrow),
+      ),
+      source: diagnosticSource,
+    });
+  }
+
+  return diagnostics;
+}
+
 function discardedCallResultDiagnostics(
   index: ProjectIndex,
   parsed: ParsedDocument,
@@ -609,6 +676,96 @@ function containsCallExpression(expression: SyntaxNode): boolean {
   return expression.namedChildren.some((child) =>
     containsCallExpression(child),
   );
+}
+
+function isForceUnwrapRethrow(node: SyntaxNode): boolean {
+  return node.text.trim().endsWith('!!');
+}
+
+function noOptionalToUnwrapMessage(forceUnwrap: boolean): string {
+  const marker = forceUnwrap ? '!!' : '!';
+  return `No optional to rethrow before '${marker}' in the expression, please remove '${marker}'.`;
+}
+
+function enclosingCallable(node: SyntaxNode): SyntaxNode | undefined {
+  let current = node.parent;
+
+  while (current) {
+    if (
+      current.type === 'func_definition' ||
+      current.type === 'macro_declaration'
+    ) {
+      return current;
+    }
+
+    current = current.parent;
+  }
+
+  return undefined;
+}
+
+function callableReturnType(callable: SyntaxNode): string | undefined {
+  return callableHeader(callable)?.childForFieldName('return_type')?.text;
+}
+
+function callableName(callable: SyntaxNode): string {
+  return callableHeader(callable)?.childForFieldName('name')?.text ?? '<fn>';
+}
+
+function callableHeader(callable: SyntaxNode): SyntaxNode | undefined {
+  return callable.namedChildren.find(
+    (child) => child.type === 'func_header' || child.type === 'macro_header',
+  );
+}
+
+function expectedTypeForRethrow(
+  index: ProjectIndex,
+  parsed: ParsedDocument,
+  rethrow: SyntaxNode,
+): string | undefined {
+  const declaration = ancestorOfType(rethrow, 'declaration');
+  const declarationValue = declaration?.childForFieldName('right');
+  if (
+    declaration &&
+    declarationValue &&
+    containsNode(declarationValue, rethrow)
+  ) {
+    return declaration.childForFieldName('type')?.text;
+  }
+
+  const assignment = ancestorOfType(rethrow, 'assignment_expr');
+  const assignmentRight =
+    assignment?.childForFieldName('right') ?? assignment?.namedChildren.at(-1);
+  const assignmentLeft =
+    assignment?.childForFieldName('left') ?? assignment?.namedChildren[0];
+  if (
+    assignment &&
+    assignmentLeft &&
+    assignmentRight &&
+    containsNode(assignmentRight, rethrow)
+  ) {
+    return expressionTypeName(index, parsed, assignmentLeft);
+  }
+
+  return undefined;
+}
+
+function containsNode(root: SyntaxNode, target: SyntaxNode): boolean {
+  return (
+    target.startIndex >= root.startIndex && target.endIndex <= root.endIndex
+  );
+}
+
+function rethrowInNonOptionalCallableMessage(
+  callable: string,
+  returnType: string,
+  expectedType: string | undefined,
+): string {
+  if (expectedType && isOptionalTypeName(expectedType)) {
+    return `This expression is doing a rethrow, but '${callable}' returns '${returnType}', which isn't an optional type. Since you are assigning to an optional, maybe you added '!' by mistake?`;
+  }
+
+  return `This expression is doing a rethrow, but '${callable}' returns '${returnType}', which isn't an optional type. Did you intend to use '!!' instead?`;
 }
 
 function discardedCallResultMessage(
