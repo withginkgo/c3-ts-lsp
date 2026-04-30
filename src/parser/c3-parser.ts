@@ -1769,10 +1769,24 @@ function looksLikeAggregateBodyOpen(
   braceOffset: number,
 ): boolean {
   const prefix = source
-    .slice(previousStatementBoundary(source, braceOffset), braceOffset)
+    .slice(previousDeclarationHeaderBoundary(source, braceOffset), braceOffset)
     .trim();
 
   return /^(?:struct|union|enum|bitstruct|interface|constdef)\b/.test(prefix);
+}
+
+function previousDeclarationHeaderBoundary(
+  source: string,
+  offset: number,
+): number {
+  for (let index = offset - 1; index >= 0; index--) {
+    const char = source[index];
+    if (char === ';' || char === '{' || char === '}') {
+      return index + 1;
+    }
+  }
+
+  return 0;
 }
 
 function previousStatementBoundary(source: string, offset: number): number {
