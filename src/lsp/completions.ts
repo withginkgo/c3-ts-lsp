@@ -22,6 +22,7 @@ import {
   attributeCompletionBeforeCursor,
   callArgumentContextBeforeCursor,
   dotAccessCompletionBeforeCursor,
+  identifierCompletionBeforeCursor,
   memberAccessBeforeCursor,
   methodContext,
   modulePathCompletionBeforeCursor,
@@ -30,11 +31,14 @@ import {
   structInitializerFieldBeforeCursor,
   type AttributeCompletionContext,
   type CallArgumentContext,
+  type IdentifierCompletionContext,
   type ModulePathCompletionContext,
   type StructInitializerFieldCompletionContext,
   typeMethodDeclarationBeforeCursor,
 } from './completion-context.js';
 import { importTextEdit } from './import-edits.js';
+
+const MAX_AUTO_IMPORT_COMPLETIONS = 200;
 
 export function completionItems(
   index: ProjectIndex,
@@ -105,23 +109,32 @@ export function completionItems(
     return moduleMemberCompletions(index, current, prefix);
   }
 
+  const identifierCompletion = identifierCompletionBeforeCursor(doc, position);
   const argumentItems = argumentNameCompletions(index, doc, current, position);
-  const visibleSymbols = index.visibleSymbolsAt(current.uri, position);
+  const visibleSymbols = index
+    .visibleSymbolsAt(current.uri, position)
+    .filter((symbol) =>
+      completionLabelMatchesPrefix(symbol.name, identifierCompletion.prefix),
+    );
   const visibleNames = new Set(visibleSymbols.map((symbol) => symbol.name));
 
   const symbolItems = visibleSymbols.map((symbol) =>
     symbolCompletionItem(symbol),
   );
-  const autoImportItems = index
-    .autoImportCandidates(current)
-    .filter(({ symbol }) => !visibleNames.has(symbol.name))
-    .map(({ moduleName, symbol }) =>
-      autoImportCompletionItem(current, moduleName, symbol),
-    );
+  const autoImportItems =
+    identifierCompletion.prefix.length > 0
+      ? index
+          .autoImportCandidates(current, identifierCompletion.prefix)
+          .slice(0, MAX_AUTO_IMPORT_COMPLETIONS)
+          .filter(({ symbol }) => !visibleNames.has(symbol.name))
+          .map(({ moduleName, symbol }) =>
+            autoImportCompletionItem(current, moduleName, symbol),
+          )
+      : [];
 
   return [
     ...argumentItems,
-    ...keywordCompletions(),
+    ...keywordCompletions(identifierCompletion),
     ...symbolItems,
     ...autoImportItems,
   ];
@@ -243,7 +256,9 @@ function callableForContext(
     : null;
 }
 
-function keywordCompletions(): CompletionItem[] {
+function keywordCompletions(
+  context?: IdentifierCompletionContext,
+): CompletionItem[] {
   return [
     ...C3_KEYWORDS.map((keyword) => ({
       label: keyword,
@@ -261,7 +276,9 @@ function keywordCompletions(): CompletionItem[] {
       label: builtin,
       kind: CompletionItemKind.Function,
     })),
-  ];
+  ].filter((item) =>
+    completionLabelMatchesPrefix(String(item.label), context?.prefix ?? ''),
+  );
 }
 
 function memberCompletions(
@@ -501,4 +518,8 @@ function uniqueCompletionItems(items: CompletionItem[]): CompletionItem[] {
   }
 
   return unique;
+}
+
+function completionLabelMatchesPrefix(label: string, prefix: string): boolean {
+  return prefix.length === 0 || label.startsWith(prefix);
 }

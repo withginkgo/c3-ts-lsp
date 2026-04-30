@@ -226,6 +226,7 @@ export class ProjectIndex {
 
   autoImportCandidates(
     current: ParsedDocument,
+    prefix = '',
   ): Array<{ moduleName: string; symbol: C3Symbol }> {
     const imported = this.importedModuleNameSet(current);
     const candidates: Array<{ moduleName: string; symbol: C3Symbol }> = [];
@@ -239,7 +240,9 @@ export class ProjectIndex {
         continue;
       }
 
-      for (const symbols of mod.symbols.values()) {
+      for (const [name, symbols] of mod.symbols) {
+        if (prefix.length > 0 && !name.startsWith(prefix)) continue;
+
         for (const symbol of symbols) {
           if (!isVisibleFrom(symbol, current.moduleName)) continue;
 

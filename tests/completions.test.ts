@@ -1143,7 +1143,7 @@ test('completionItems returns constdef constants for partial member access', () 
   );
 });
 
-test('completionItems includes visible symbols and auto-imports unrelated modules', () => {
+test('completionItems includes visible symbols and skips empty-prefix auto imports', () => {
   const index = new ProjectIndex();
   const appUri = 'file:///workspace/app.c3';
   const netUri = 'file:///workspace/lib/net.c3';
@@ -1181,17 +1181,9 @@ test('completionItems includes visible symbols and auto-imports unrelated module
     items.find((item) => item.label === 'connect')?.detail,
     'void connect()',
   );
-  assert.deepEqual(
-    items.find((item) => item.label === 'unrelated')?.additionalTextEdits,
-    [
-      {
-        range: {
-          start: { line: 1, character: 0 },
-          end: { line: 1, character: 0 },
-        },
-        newText: 'import other;\n',
-      },
-    ],
+  assert.equal(
+    items.some((item) => item.label === 'unrelated'),
+    false,
   );
 });
 

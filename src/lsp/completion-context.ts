@@ -35,6 +35,11 @@ export type StructInitializerFieldCompletionContext = {
   replaceRange: Range;
 };
 
+export type IdentifierCompletionContext = {
+  prefix: string;
+  replaceRange: Range;
+};
+
 export function attributeCompletionBeforeCursor(
   doc: TextDocument,
   position: Position,
@@ -121,6 +126,27 @@ export function structInitializerFieldBeforeCursor(
 
   return {
     typeName: initializerTypeBeforeBrace(text, braceOffset) ?? undefined,
+    prefix,
+    replaceRange: {
+      start: doc.positionAt(offset - prefix.length),
+      end: position,
+    },
+  };
+}
+
+export function identifierCompletionBeforeCursor(
+  doc: TextDocument,
+  position: Position,
+): IdentifierCompletionContext {
+  const text = doc.getText();
+  const offset = doc.offsetAt(position);
+  const before = text.slice(0, offset);
+  const match = before.match(
+    /(^|[^A-Za-z0-9_$@])([A-Za-z_$@][A-Za-z0-9_$@]*)$/,
+  );
+  const prefix = match?.[2] ?? '';
+
+  return {
     prefix,
     replaceRange: {
       start: doc.positionAt(offset - prefix.length),
@@ -255,9 +281,11 @@ function implicitTopLevelTypeMethodDeclarationBeforeCursor(
   lineStart: number,
   line: string,
 ): RegExpMatchArray | null {
+  const match = line.match(IMPLICIT_TYPE_METHOD_DECLARATION);
+  if (!match) return null;
   if (braceDepthBefore(text, lineStart) !== 0) return null;
 
-  return line.match(IMPLICIT_TYPE_METHOD_DECLARATION);
+  return match;
 }
 
 function braceDepthBefore(text: string, offset: number): number {
