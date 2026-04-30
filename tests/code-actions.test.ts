@@ -53,6 +53,59 @@ test('codeActions suggests imports for unresolved symbols', () => {
   );
 });
 
+test('codeActions suggests imports for undefined array size variables', () => {
+  const index = new ProjectIndex();
+  const appUri = 'file:///workspace/app.c3';
+  const app = parseSource(
+    appUri,
+    [
+      'module app;',
+      'struct Conn {',
+      '    char[BUFFER_SIZE] out_buf;',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(app, false);
+  index.upsert(
+    parseSource(
+      'file:///workspace/config.c3',
+      'module config;\nconst int BUFFER_SIZE = 1024;\n',
+    ),
+    false,
+  );
+  index.rebuild();
+
+  const diagnostics = semanticDiagnostics(index, app);
+  const actions = codeActions(index, app, {
+    textDocument: { uri: appUri },
+    range: diagnostics[0]!.range,
+    context: { diagnostics },
+  });
+
+  assert.deepEqual(
+    actions.map((action) => [
+      action.title,
+      action.kind,
+      action.edit?.changes?.[appUri]?.[0],
+    ]),
+    [
+      [
+        'Import config',
+        'quickfix',
+        {
+          range: {
+            start: { line: 1, character: 0 },
+            end: { line: 1, character: 0 },
+          },
+          newText: 'import config;\n',
+        },
+      ],
+    ],
+  );
+});
+
 test('codeActions can remove unresolved imports', () => {
   const index = new ProjectIndex();
   const uri = 'file:///workspace/app.c3';

@@ -29,7 +29,9 @@ function missingImportActions(
   current: ParsedDocument,
   diagnostic: Diagnostic,
 ): CodeAction[] {
-  const match = diagnostic.message.match(/^Unresolved symbol '([^']+)'$/);
+  const match = diagnostic.message.match(
+    /^(?:Unresolved symbol|Undefined variable) '([^']+)'$/,
+  );
   if (!match) return [];
 
   const ref = match[1].split('::').at(-1);

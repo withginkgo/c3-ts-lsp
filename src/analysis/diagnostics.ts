@@ -448,7 +448,7 @@ function pushReferenceDiagnostic(
     diagnostics.push({
       severity: DiagnosticSeverity.Error,
       range: rangeFromNode(ref),
-      message: `Unresolved symbol '${ref.text}'`,
+      message: notFoundReferenceMessage(ref),
       source: diagnosticSource,
     });
   }
@@ -457,10 +457,46 @@ function pushReferenceDiagnostic(
     diagnostics.push({
       severity: DiagnosticSeverity.Error,
       range: rangeFromNode(ref),
-      message: `Ambiguous symbol '${ref.text}' (${result.candidates.length} candidates)`,
+      message: ambiguousReferenceMessage(ref, result.candidates.length),
       source: diagnosticSource,
     });
   }
+}
+
+function notFoundReferenceMessage(ref: SyntaxNode): string {
+  if (isVariableReference(ref)) {
+    return `Undefined variable '${ref.text}'`;
+  }
+
+  return `Unresolved symbol '${ref.text}'`;
+}
+
+function ambiguousReferenceMessage(ref: SyntaxNode, count: number): string {
+  if (isVariableReference(ref)) {
+    return `Ambiguous variable '${ref.text}' (${count} candidates)`;
+  }
+
+  return `Ambiguous symbol '${ref.text}' (${count} candidates)`;
+}
+
+function isVariableReference(ref: SyntaxNode): boolean {
+  return ref.type === 'ident_expr' && !isCallTargetReference(ref);
+}
+
+function isCallTargetReference(ref: SyntaxNode): boolean {
+  const parent = ref.parent;
+  if (!parent || parent.type !== 'call_expr') return false;
+
+  const functionNode = parent.childForFieldName('function');
+  return !!functionNode && sameNode(functionNode, ref);
+}
+
+function sameNode(a: SyntaxNode, b: SyntaxNode): boolean {
+  return (
+    a.type === b.type &&
+    a.startIndex === b.startIndex &&
+    a.endIndex === b.endIndex
+  );
 }
 
 function referenceNodes(root: SyntaxNode): SyntaxNode[] {

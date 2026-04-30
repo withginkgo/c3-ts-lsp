@@ -101,6 +101,29 @@ test('semanticDiagnostics reports unresolved expression symbols', () => {
   );
 });
 
+test('semanticDiagnostics reports undefined array size variables', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'const int BUF_SIZE = 1024;',
+      'struct Conn {',
+      '    char[BUFFER_SIZE] out_buf;',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(
+    semanticDiagnostics(index, parsed).map((diagnostic) => diagnostic.message),
+    ["Undefined variable 'BUFFER_SIZE'"],
+  );
+});
+
 test('semanticDiagnostics resolves local consts in compile-time asserts', () => {
   const index = new ProjectIndex();
   const uri = 'file:///workspace/app.c3';
