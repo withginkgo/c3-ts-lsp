@@ -25,9 +25,11 @@ import {
   modulePathCompletionBeforeCursor,
   modulePrefixBeforeCursor,
   namedArgumentsBeforeCursor,
+  structInitializerFieldBeforeCursor,
   type AttributeCompletionContext,
   type CallArgumentContext,
   type ModulePathCompletionContext,
+  type StructInitializerFieldCompletionContext,
   typeMethodDeclarationBeforeCursor,
 } from './completion-context.js';
 import { importTextEdit } from './import-edits.js';
@@ -74,6 +76,20 @@ export function completionItems(
       current,
       memberAccess.receiver,
       memberAccess.position,
+    );
+  }
+
+  const structInitializerField = structInitializerFieldBeforeCursor(
+    doc,
+    position,
+  );
+
+  if (structInitializerField) {
+    return structInitializerFieldCompletions(
+      index,
+      current,
+      position,
+      structInitializerField,
     );
   }
 
@@ -270,6 +286,28 @@ function memberCompletionItem(symbol: C3Symbol): CompletionItem {
   }
 
   return item;
+}
+
+function structInitializerFieldCompletions(
+  index: ProjectIndex,
+  current: ParsedDocument,
+  position: Position,
+  context: StructInitializerFieldCompletionContext,
+): CompletionItem[] {
+  return index
+    .memberSymbolsForType(current.uri, context.typeName, position)
+    .filter(
+      (symbol) =>
+        symbol.kind === SymbolKind.Field &&
+        symbol.name.startsWith(context.prefix),
+    )
+    .map((symbol) => ({
+      ...memberCompletionItem(symbol),
+      textEdit: {
+        range: context.replaceRange,
+        newText: symbol.name,
+      },
+    }));
 }
 
 function symbolCompletionItem(symbol: C3Symbol): CompletionItem {

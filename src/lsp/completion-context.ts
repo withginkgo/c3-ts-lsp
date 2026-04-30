@@ -29,6 +29,12 @@ export type CallArgumentContext = {
   argumentsText: string;
 };
 
+export type StructInitializerFieldCompletionContext = {
+  typeName: string;
+  prefix: string;
+  replaceRange: Range;
+};
+
 export function attributeCompletionBeforeCursor(
   doc: TextDocument,
   position: Position,
@@ -93,6 +99,36 @@ export function memberAccessBeforeCursor(
   return {
     receiver: match[1],
     position: doc.positionAt(match.index + match[1].length),
+  };
+}
+
+export function structInitializerFieldBeforeCursor(
+  doc: TextDocument,
+  position: Position,
+): StructInitializerFieldCompletionContext | null {
+  const text = doc.getText();
+  const offset = doc.offsetAt(position);
+  const before = text.slice(0, offset);
+  const fieldMatch = before.match(
+    /(^|[^A-Za-z0-9_$@])\.\s*([A-Za-z_$@][A-Za-z0-9_$@]*)?$/,
+  );
+
+  if (!fieldMatch) return null;
+
+  const prefix = fieldMatch[2] ?? '';
+  const braceOffset = unclosedBraceBefore(text, offset);
+  if (braceOffset == null) return null;
+
+  const typeName = initializerTypeBeforeBrace(text, braceOffset);
+  if (!typeName) return null;
+
+  return {
+    typeName,
+    prefix,
+    replaceRange: {
+      start: doc.positionAt(offset - prefix.length),
+      end: position,
+    },
   };
 }
 
@@ -258,6 +294,94 @@ function modulePathStartInLine(line: string): number | null {
   }
 
   return null;
+}
+
+function unclosedBraceBefore(text: string, offset: number): number | null {
+  const stack: number[] = [];
+  let quote: string | undefined;
+  let escaped = false;
+  let lineComment = false;
+  let blockComment = false;
+
+  for (let index = 0; index < offset; index++) {
+    const char = text[index];
+    const next = text[index + 1];
+
+    if (lineComment) {
+      if (char === '\n') lineComment = false;
+      continue;
+    }
+
+    if (blockComment) {
+      if (char === '*' && next === '/') {
+        blockComment = false;
+        index++;
+      }
+      continue;
+    }
+
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+
+      if (quote !== '`' && char === '\\') {
+        escaped = true;
+        continue;
+      }
+
+      if (char === quote) quote = undefined;
+      continue;
+    }
+
+    if (char === '/' && next === '/') {
+      lineComment = true;
+      index++;
+      continue;
+    }
+
+    if (char === '/' && next === '*') {
+      blockComment = true;
+      index++;
+      continue;
+    }
+
+    if (char === '"' || char === "'" || char === '`') {
+      quote = char;
+      continue;
+    }
+
+    if (char === '{') {
+      stack.push(index);
+      continue;
+    }
+
+    if (char === '}') {
+      stack.pop();
+    }
+  }
+
+  return stack.at(-1) ?? null;
+}
+
+function initializerTypeBeforeBrace(
+  text: string,
+  braceOffset: number,
+): string | null {
+  const beforeBrace = text.slice(0, braceOffset);
+  const match = beforeBrace.match(
+    new RegExp(`(${C3_QUALIFIED_IDENTIFIER_PATTERN})\\s*$`),
+  );
+
+  if (!match?.[1] || match.index == null) return null;
+
+  const beforeType = beforeBrace.slice(0, match.index).trimEnd();
+  if (/\b(?:struct|union|bitstruct|enum|interface)\s*$/.test(beforeType)) {
+    return null;
+  }
+
+  return match[1];
 }
 
 function openParenBeforeCursor(text: string, offset: number): number | null {
