@@ -217,6 +217,32 @@ test('completionItems filters attributes after a typed @ prefix', () => {
   });
 });
 
+test('completionItems replaces the $ trigger for compile-time completions', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = ['module app;', 'fn void use() {', '    $', '}', ''].join(
+    '\n',
+  );
+  const parsed = parseSource(uri, source);
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+  const dollarOffset = source.indexOf('$');
+  const position = doc.positionAt(dollarOffset + '$'.length);
+
+  index.upsert(parsed);
+
+  const item = completionItems(index, doc, parsed, position).find(
+    (candidate) => candidate.label === '$defined',
+  );
+
+  assert.deepEqual(item?.textEdit, {
+    range: {
+      start: doc.positionAt(dollarOffset),
+      end: position,
+    },
+    newText: '$defined',
+  });
+});
+
 test('completionItems suggests implemented interface methods in type method declarations', () => {
   const index = new ProjectIndex();
   const uri = 'file:///workspace/app.c3';

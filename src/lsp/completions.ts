@@ -119,7 +119,10 @@ export function completionItems(
   const visibleNames = new Set(visibleSymbols.map((symbol) => symbol.name));
 
   const symbolItems = visibleSymbols.map((symbol) =>
-    symbolCompletionItem(symbol),
+    identifierCompletionItem(
+      symbolCompletionItem(symbol),
+      identifierCompletion,
+    ),
   );
   const autoImportItems =
     identifierCompletion.prefix.length > 0
@@ -128,7 +131,10 @@ export function completionItems(
           .slice(0, MAX_AUTO_IMPORT_COMPLETIONS)
           .filter(({ symbol }) => !visibleNames.has(symbol.name))
           .map(({ moduleName, symbol }) =>
-            autoImportCompletionItem(current, moduleName, symbol),
+            identifierCompletionItem(
+              autoImportCompletionItem(current, moduleName, symbol),
+              identifierCompletion,
+            ),
           )
       : [];
 
@@ -276,9 +282,11 @@ function keywordCompletions(
       label: builtin,
       kind: CompletionItemKind.Function,
     })),
-  ].filter((item) =>
-    completionLabelMatchesPrefix(String(item.label), context?.prefix ?? ''),
-  );
+  ]
+    .filter((item) =>
+      completionLabelMatchesPrefix(String(item.label), context?.prefix ?? ''),
+    )
+    .map((item) => identifierCompletionItem(item, context));
 }
 
 function memberCompletions(
@@ -418,6 +426,21 @@ function autoImportCompletionItem(
     detail: `${symbol.signature} (auto import ${moduleName})`,
     sortText: `~${symbol.name}`,
     additionalTextEdits: [importTextEdit(current, moduleName)],
+  };
+}
+
+function identifierCompletionItem(
+  item: CompletionItem,
+  context?: IdentifierCompletionContext,
+): CompletionItem {
+  if (!context?.prefix.startsWith('$')) return item;
+
+  return {
+    ...item,
+    textEdit: {
+      range: context.replaceRange,
+      newText: item.insertText ?? String(item.label),
+    },
   };
 }
 
