@@ -39,6 +39,7 @@ import {
 import { importTextEdit } from './import-edits.js';
 
 const MAX_AUTO_IMPORT_COMPLETIONS = 200;
+const TRIGGER_PARAMETER_HINTS_COMMAND = 'editor.action.triggerParameterHints';
 
 export function completionItems(
   index: ProjectIndex,
@@ -310,6 +311,10 @@ function memberCompletionItem(symbol: C3Symbol): CompletionItem {
   if (symbol.kind === SymbolKind.Method) {
     item.insertText = `${symbol.name}($0)`;
     item.insertTextFormat = InsertTextFormat.Snippet;
+    item.command = {
+      title: 'Trigger Parameter Hints',
+      command: TRIGGER_PARAMETER_HINTS_COMMAND,
+    };
   }
 
   return item;

@@ -512,6 +512,7 @@ test('completionItems inserts parens for method call completions', () => {
       item.detail,
       item.insertText,
       item.insertTextFormat,
+      item.command,
     ]),
     [
       [
@@ -520,6 +521,10 @@ test('completionItems inserts parens for method call completions', () => {
         'void EventLoop.init(&self)',
         'init($0)',
         InsertTextFormat.Snippet,
+        {
+          title: 'Trigger Parameter Hints',
+          command: 'editor.action.triggerParameterHints',
+        },
       ],
     ],
   );

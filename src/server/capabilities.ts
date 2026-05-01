@@ -34,7 +34,7 @@ export function serverInitializeResult(
       inlayHintProvider: true,
       documentFormattingProvider: options.formatting,
       completionProvider: {
-        triggerCharacters: [':', '.', '@', '$', ','],
+        triggerCharacters: [':', '.', '@', '$'],
       },
     },
   };

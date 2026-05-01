@@ -236,3 +236,44 @@ test('signatureHelp resolves incomplete method-style calls and skips receiver pa
     [['void EventLoop.init(&self, int count)', ['int count']]],
   );
 });
+
+test('signatureHelp resolves generic method-style calls and skips receiver parameters', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'struct List {}',
+    'fn void List.set_at(&self, sz index, Type type) {}',
+    'fn void use() {',
+    '    List{int} a;',
+    '    a.set_at(0, 999);',
+    '}',
+    '',
+  ].join('\n');
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+  const parsed = parseSource(uri, source);
+
+  index.upsert(parsed);
+
+  const firstArgHelp = signatureHelp(
+    index,
+    doc,
+    parsed,
+    doc.positionAt(source.indexOf('0, 999')),
+  );
+  const secondArgHelp = signatureHelp(
+    index,
+    doc,
+    parsed,
+    doc.positionAt(source.indexOf('999')),
+  );
+
+  assert.equal(firstArgHelp?.activeParameter, 0);
+  assert.equal(secondArgHelp?.activeParameter, 1);
+  assert.deepEqual(
+    firstArgHelp?.signatures[0]?.parameters?.map(
+      (parameter) => parameter.label,
+    ),
+    ['sz index', 'Type type'],
+  );
+});

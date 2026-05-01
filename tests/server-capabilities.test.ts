@@ -12,7 +12,7 @@ test('serverInitializeResult declares stable LSP capabilities', () => {
     triggerCharacters: ['(', ','],
   });
   assert.deepEqual(capabilities.completionProvider, {
-    triggerCharacters: [':', '.', '@', '$', ','],
+    triggerCharacters: [':', '.', '@', '$'],
   });
   assert.equal(capabilities.semanticTokensProvider?.full, true);
 });
