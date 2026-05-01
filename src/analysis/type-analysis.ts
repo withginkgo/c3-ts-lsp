@@ -3,6 +3,7 @@ import type { SyntaxNode } from 'tree-sitter';
 
 import type { ProjectIndex } from '../project/project-index.js';
 import { callArguments, callTargetFor } from '../shared/calls.js';
+import { referenceNarrowedAfterCatch } from '../shared/control-flow.js';
 import {
   isOptionalTypeName,
   nonOptionalTypeName,
@@ -98,11 +99,22 @@ export function expressionTypeName(
     return value ? expressionTypeName(index, parsed, value) : undefined;
   }
 
-  return index.typeNameForExpression(
+  const typeName = index.typeNameForExpression(
     parsed.uri,
     expression.text,
     rangeFromNode(expression).start,
   );
+
+  if (
+    expression.type === 'ident_expr' &&
+    typeName &&
+    isOptionalTypeName(typeName) &&
+    referenceNarrowedAfterCatch(expression)
+  ) {
+    return nonOptionalTypeName(typeName);
+  }
+
+  return typeName;
 }
 
 export function callArgumentValueNode(arg: SyntaxNode): SyntaxNode | undefined {

@@ -8,6 +8,7 @@ import type { SyntaxNode } from 'tree-sitter';
 
 import type { ProjectIndex } from '../project/project-index.js';
 import { isCallableSymbol } from '../shared/callable.js';
+import { nodeAlwaysReturns } from '../shared/control-flow.js';
 import { normalizeTypeName } from '../shared/type-ref.js';
 import type { C3Symbol, ParsedDocument } from '../shared/types.js';
 import {
@@ -167,46 +168,6 @@ function requiresReturnValue(returnType: string): boolean {
 
 function isPlainVoidType(returnType: string): boolean {
   return returnType.replace(/\s+/g, '') === 'void';
-}
-
-function nodeAlwaysReturns(node: SyntaxNode): boolean {
-  if (node.type === 'return_stmt') return true;
-
-  if (
-    node.type === 'macro_func_body' ||
-    node.type === 'compound_stmt' ||
-    node.type === 'ct_stmt_body'
-  ) {
-    return blockAlwaysReturns(node);
-  }
-
-  if (node.type === 'if_stmt') return ifAlwaysReturns(node);
-  if (node.type === 'else_part') {
-    const body = node.childForFieldName('body') ?? node.namedChildren[0];
-    return body ? nodeAlwaysReturns(body) : false;
-  }
-
-  return false;
-}
-
-function blockAlwaysReturns(node: SyntaxNode): boolean {
-  for (const child of node.namedChildren) {
-    if (nodeAlwaysReturns(child)) return true;
-  }
-
-  return false;
-}
-
-function ifAlwaysReturns(node: SyntaxNode): boolean {
-  const body = node.childForFieldName('body');
-  const elsePart = directChildOfType(node, 'else_part');
-
-  return (
-    !!body &&
-    !!elsePart &&
-    nodeAlwaysReturns(body) &&
-    nodeAlwaysReturns(elsePart)
-  );
 }
 
 function hasAttribute(symbol: C3Symbol, name: string): boolean {

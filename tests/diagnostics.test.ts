@@ -574,6 +574,52 @@ test('semanticDiagnostics accepts complete return paths and void-like returns', 
   assert.deepEqual(semanticDiagnostics(index, parsed), []);
 });
 
+test('semanticDiagnostics accepts infinite loops in non-void functions', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'fn int run() {',
+      '    while (true) {',
+      '    }',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(semanticDiagnostics(index, parsed), []);
+});
+
+test('semanticDiagnostics still reports loops that can break and fall through', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'fn int run(bool done) {',
+      '    while (true) {',
+      '        if (done) {',
+      '            break;',
+      '        }',
+      '    }',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(
+    semanticDiagnostics(index, parsed).map((diagnostic) => diagnostic.message),
+    ["Function 'run' must return a value of type 'int' on all paths"],
+  );
+});
+
 test('semanticDiagnostics reports discarded optional call results', () => {
   const index = new ProjectIndex();
   const uri = 'file:///workspace/app.c3';
@@ -755,6 +801,59 @@ test('semanticDiagnostics resolves catch unwrap variables in their body scope', 
   assert.deepEqual(
     semanticDiagnostics(index, parsed).map((diagnostic) => diagnostic.message),
     ["Undefined variable 'err'"],
+  );
+});
+
+test('semanticDiagnostics narrows optional values after terminating catch unwrap', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'struct Order {}',
+      'fn Order? next_order();',
+      'fn int barista_task() {',
+      '    while (true) {',
+      '        Order? maybe_order = next_order();',
+      '        if (catch err = maybe_order) {',
+      '            return 0;',
+      '        }',
+      '        Order order = maybe_order;',
+      '    }',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(semanticDiagnostics(index, parsed), []);
+});
+
+test('semanticDiagnostics keeps optional values optional after non-terminating catch unwrap', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'fn int? next_value();',
+      'fn void run() {',
+      '    int? maybe = next_value();',
+      '    if (catch err = maybe) {',
+      '    }',
+      '    int value = maybe;',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(
+    semanticDiagnostics(index, parsed).map((diagnostic) => diagnostic.message),
+    ["Cannot initialize 'value' of type 'int' with 'int?'"],
   );
 });
 
