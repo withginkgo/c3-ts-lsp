@@ -267,7 +267,7 @@ export class ProjectIndex {
 
     if (local) return local;
 
-    for (const importedModule of this.visibleImportedModules(current)) {
+    for (const importedModule of this.visibleImportedAndChildModules(current)) {
       const imported = importedModule.allSymbols
         .get(ref)
         ?.find((symbol) => isVisibleFrom(symbol, current.moduleName));
@@ -395,7 +395,7 @@ export class ProjectIndex {
 
     const imported: C3Symbol[] = [];
 
-    for (const importedModule of this.visibleImportedModules(current)) {
+    for (const importedModule of this.visibleImportedAndChildModules(current)) {
       imported.push(
         ...(importedModule.symbols.get(ref) ?? []).filter((symbol) =>
           isVisibleFrom(symbol, current.moduleName),
@@ -550,6 +550,9 @@ export class ProjectIndex {
       }
     }
 
+    const importedChild = this.importedChildModuleForPrefix(current, prefix);
+    if (importedChild) return importedChild.name;
+
     const relative = this.modulesByName.get(`${current.moduleName}::${prefix}`);
     if (relative) return relative.name;
 
@@ -618,7 +621,20 @@ export class ProjectIndex {
       }
     }
 
-    // 4. 尝试当前模块的相对路径解析
+    // 4. 检查导入模块下的子模块，例如 import std::thread 后的 channel::create_buffered
+    const importedChild = this.importedChildModuleForPrefix(
+      current,
+      modulePrefix,
+    );
+    if (importedChild) {
+      return (
+        importedChild.allSymbols
+          .get(symbolName)
+          ?.filter((symbol) => isVisibleFrom(symbol, current.moduleName)) ?? []
+      );
+    }
+
+    // 5. 尝试当前模块的相对路径解析
     const relativeModuleName = `${current.moduleName}::${modulePrefix}`;
     const relativeModule = this.modulesByName.get(relativeModuleName);
     return relativeModule?.allSymbols.get(symbolName) ?? [];
@@ -1163,7 +1179,7 @@ export class ProjectIndex {
     const symbols = [...currentModule.symbols.values()].flat();
     const visited = new Set([currentModule.name]);
 
-    for (const importedModule of this.visibleImportedModules(current)) {
+    for (const importedModule of this.visibleImportedAndChildModules(current)) {
       this.collectModuleAndImports(
         importedModule,
         current.moduleName,
@@ -1173,6 +1189,51 @@ export class ProjectIndex {
     }
 
     return symbols;
+  }
+
+  private visibleImportedAndChildModules(
+    current: ParsedDocument,
+  ): ModuleIndex[] {
+    const importedModules = this.visibleImportedModules(current);
+    const modules = [...importedModules];
+    const seen = new Set(modules.map((mod) => mod.name));
+
+    for (const importedModule of this.explicitImportedModules(current)) {
+      for (const childModule of this.directChildModules(importedModule.name)) {
+        if (seen.has(childModule.name)) continue;
+
+        seen.add(childModule.name);
+        modules.push(childModule);
+      }
+    }
+
+    return modules;
+  }
+
+  private importedChildModuleForPrefix(
+    current: ParsedDocument,
+    prefix: string,
+  ): ModuleIndex | undefined {
+    for (const importedModule of this.visibleImportedModules(current)) {
+      const childModule = this.modulesByName.get(
+        `${importedModule.name}::${prefix}`,
+      );
+      if (childModule) return childModule;
+    }
+
+    return undefined;
+  }
+
+  private directChildModules(moduleName: string): ModuleIndex[] {
+    const prefix = `${moduleName}::`;
+
+    return [...this.modulesByName.values()]
+      .filter((mod) => {
+        if (!mod.name.startsWith(prefix)) return false;
+
+        return !mod.name.slice(prefix.length).includes('::');
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
   }
 
   private collectModuleAndImports(
@@ -1213,6 +1274,20 @@ export class ProjectIndex {
   }
 
   private visibleImportedModules(current: ParsedDocument): ModuleIndex[] {
+    const modules = this.explicitImportedModules(current);
+    const seen = new Set(modules.map((mod) => mod.name));
+
+    for (const implicitModule of this.implicitCoreModules()) {
+      if (seen.has(implicitModule.name)) continue;
+
+      seen.add(implicitModule.name);
+      modules.push(implicitModule);
+    }
+
+    return modules;
+  }
+
+  private explicitImportedModules(current: ParsedDocument): ModuleIndex[] {
     const currentModule = this.modulesByName.get(current.moduleName);
     if (!currentModule) return [];
 
@@ -1225,13 +1300,6 @@ export class ProjectIndex {
 
       seen.add(importedModule.name);
       modules.push(importedModule);
-    }
-
-    for (const implicitModule of this.implicitCoreModules()) {
-      if (seen.has(implicitModule.name)) continue;
-
-      seen.add(implicitModule.name);
-      modules.push(implicitModule);
     }
 
     return modules;

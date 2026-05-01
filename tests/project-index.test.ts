@@ -91,6 +91,74 @@ test('ProjectIndex resolves imported and qualified module symbols', () => {
   assert.equal(index.findSymbol(appUri, 'lib::net::connect')?.uri, netUri);
 });
 
+test('ProjectIndex resolves symbols from child modules of imported modules', () => {
+  const index = new ProjectIndex();
+  const appUri = 'file:///workspace/app.c3';
+  const channelUri = 'file:///stdlib/std/threads/buffered_channel.c3';
+  const source = [
+    'module app;',
+    'import std::thread;',
+    'struct ConsumerContext {',
+    '    int id;',
+    '    BufferedChannel{int}* ch;',
+    '}',
+    'fn void use(ConsumerContext context) {',
+    '    context.ch.pop();',
+    '    channel::create_buffered(mem, 1);',
+    '}',
+    '',
+  ].join('\n');
+  const doc = TextDocument.create(appUri, 'c3', 1, source);
+
+  index.upsert(parseSource(appUri, source), false);
+  index.upsert(
+    parseSource(
+      'file:///stdlib/std/threads/thread.c3',
+      ['module std::thread;', ''].join('\n'),
+      { sourceKind: 'stdlib' },
+    ),
+    false,
+  );
+  index.upsert(
+    parseSource(
+      channelUri,
+      [
+        'module std::thread::channel <Type>;',
+        'typedef BufferedChannel = void;',
+        'fn BufferedChannel*? create_buffered(Allocator allocator, sz size = 1) {}',
+        'fn Type? BufferedChannel.pop(&self) {}',
+        '',
+      ].join('\n'),
+      { sourceKind: 'stdlib' },
+    ),
+    false,
+  );
+  index.rebuild();
+
+  assert.equal(index.findSymbol(appUri, 'BufferedChannel')?.uri, channelUri);
+  assert.equal(
+    index.resolveTypeName(
+      appUri,
+      'BufferedChannel{int}',
+      doc.positionAt(source.indexOf('BufferedChannel')),
+    ).selected?.uri,
+    channelUri,
+  );
+  assert.equal(
+    index.resolveSymbol(
+      appUri,
+      'channel::create_buffered',
+      doc.positionAt(source.indexOf('channel::create_buffered')),
+    ).selected?.uri,
+    channelUri,
+  );
+  assert.equal(
+    index.resolveSymbol(appUri, 'pop', doc.positionAt(source.indexOf('pop()')))
+      .selected?.uri,
+    channelUri,
+  );
+});
+
 test('ProjectIndex findSymbol ignores unrelated modules', () => {
   const index = new ProjectIndex();
   const appUri = 'file:///workspace/app.c3';

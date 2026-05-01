@@ -1061,6 +1061,44 @@ test('semanticDiagnostics accepts recovered stdlib receiver methods on generic s
   assert.deepEqual(semanticDiagnostics(index, app), []);
 });
 
+test('semanticDiagnostics accepts generic types from child modules of imported stdlib modules', () => {
+  const index = new ProjectIndex();
+  const app = parseSource(
+    'file:///workspace/comprehensive.c3',
+    [
+      'module conditional_variable;',
+      'import std::thread;',
+      'struct ConsumerContext',
+      '{',
+      '    int id;',
+      '    BufferedChannel{int}* ch;',
+      '}',
+      '',
+    ].join('\n'),
+  );
+  const thread = parseSource(
+    'file:///stdlib/std/threads/thread.c3',
+    ['module std::thread;', ''].join('\n'),
+    { sourceKind: 'stdlib' },
+  );
+  const channel = parseSource(
+    'file:///stdlib/std/threads/buffered_channel.c3',
+    [
+      'module std::thread::channel <Type>;',
+      'typedef BufferedChannel = void;',
+      '',
+    ].join('\n'),
+    { sourceKind: 'stdlib' },
+  );
+
+  for (const parsed of [app, thread, channel]) {
+    index.upsert(parsed, false);
+  }
+  index.rebuild();
+
+  assert.deepEqual(semanticDiagnostics(index, app), []);
+});
+
 test('semanticDiagnostics ignores inactive stdlib platform type candidates', () => {
   const index = new ProjectIndex({ activeEnvironment: ['LINUX'] });
   const app = parseSource(
