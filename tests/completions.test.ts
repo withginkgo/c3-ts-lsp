@@ -424,6 +424,37 @@ test('completionItems returns struct members after member access', () => {
   );
 });
 
+test('completionItems returns builtin any members after member access', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'fn void batch_job(any[] args) {',
+    '    args[0].',
+    '}',
+    '',
+  ].join('\n');
+  const parsed = parseSource(uri, source);
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+
+  index.upsert(parsed);
+
+  const items = completionItems(
+    index,
+    doc,
+    parsed,
+    doc.positionAt(source.indexOf('args[0].') + 'args[0].'.length),
+  );
+
+  assert.deepEqual(
+    items.map((item) => [item.label, item.kind, item.detail]),
+    [
+      ['ptr', CompletionItemKind.Field, 'void* ptr;'],
+      ['type', CompletionItemKind.Field, 'typeid type;'],
+    ],
+  );
+});
+
 test('completionItems inserts parens for method call completions', () => {
   const index = new ProjectIndex();
   const uri = 'file:///workspace/app.c3';

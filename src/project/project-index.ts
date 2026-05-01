@@ -14,6 +14,10 @@ import type {
   SourceKind,
 } from '../shared/types.js';
 import {
+  builtinOwnerSymbol,
+  builtinTypeSymbol,
+} from '../shared/builtin-types.js';
+import {
   collectionElementTypeName,
   nominalTypeName,
   normalizeTypeName,
@@ -275,6 +279,9 @@ export class ProjectIndex {
       if (imported) return imported;
     }
 
+    const builtin = builtinTypeSymbol(ref);
+    if (builtin) return builtin;
+
     return undefined;
   }
 
@@ -313,9 +320,16 @@ export class ProjectIndex {
       return this.resultFromCandidates(moduleCandidates);
     }
 
-    return this.resultFromCandidates(
-      this.visibleUnqualifiedNestedCandidates(current, ref),
+    const nestedCandidates = this.visibleUnqualifiedNestedCandidates(
+      current,
+      ref,
     );
+    if (nestedCandidates.length > 0) {
+      return this.resultFromCandidates(nestedCandidates);
+    }
+
+    const builtin = builtinTypeSymbol(ref);
+    return this.resultFromCandidates(builtin ? [builtin] : []);
   }
 
   findSymbolAt(
@@ -327,6 +341,9 @@ export class ProjectIndex {
   }
 
   ownerSymbol(symbol: C3Symbol): C3Symbol | undefined {
+    const builtinOwner = builtinOwnerSymbol(symbol);
+    if (builtinOwner) return builtinOwner;
+
     const parsed = this.parsedByUri.get(symbol.uri);
     if (!parsed) return undefined;
 
@@ -1171,6 +1188,9 @@ export class ProjectIndex {
 
     if (typeSymbols.length > 0) return uniqueSymbols(typeSymbols);
 
+    const builtin = builtinTypeSymbol(typeName);
+    if (builtin) return [builtin];
+
     return this.visibleSymbolsForMemberLookup(current)
       .filter(
         (symbol) =>
@@ -1227,6 +1247,10 @@ export class ProjectIndex {
         `${importedModule.name}::${prefix}`,
       );
       if (childModule) return childModule;
+    }
+
+    if (!prefix.includes('::')) {
+      return this.modulesByName.get(`std::core::${prefix}`);
     }
 
     return undefined;

@@ -255,6 +255,53 @@ test('semanticDiagnostics accepts resolved members', () => {
   assert.deepEqual(semanticDiagnostics(index, parsed), []);
 });
 
+test('semanticDiagnostics accepts builtin any ptr and type fields', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'fn void batch_job(any[] args) {',
+      '    int task_id = *(int*)args[0].ptr;',
+      '    typeid task_type = args[0].type;',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(semanticDiagnostics(index, parsed), []);
+});
+
+test('semanticDiagnostics resolves string functions from implicit std::core child modules', () => {
+  const index = new ProjectIndex();
+  const app = parseSource(
+    'file:///workspace/app.c3',
+    [
+      'module app;',
+      'fn void use() {',
+      '    string::format("task");',
+      '}',
+      '',
+    ].join('\n'),
+  );
+  const string = parseSource(
+    'file:///stdlib/std/core/string.c3',
+    ['module std::core::string;', 'fn String format(args...) {}', ''].join(
+      '\n',
+    ),
+    { sourceKind: 'stdlib' },
+  );
+
+  index.upsert(app, false);
+  index.upsert(string, false);
+  index.rebuild();
+
+  assert.deepEqual(semanticDiagnostics(index, app), []);
+});
+
 test('semanticDiagnostics resolves alias receiver methods without target ambiguity', () => {
   const index = new ProjectIndex();
   const app = parseSource(

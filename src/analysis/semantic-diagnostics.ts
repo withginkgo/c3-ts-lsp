@@ -7,13 +7,10 @@ import {
 import type { SyntaxNode } from 'tree-sitter';
 
 import type { ProjectIndex } from '../project/project-index.js';
+import { isBuiltinTypeName } from '../shared/builtin-types.js';
 import { callableParameters, isCallableSymbol } from '../shared/callable.js';
 import { callTargetFor } from '../shared/calls.js';
-import {
-  isOptionalTypeName,
-  terminalTypeName,
-  typeNamesCompatible,
-} from '../shared/type-ref.js';
+import { isOptionalTypeName, typeNamesCompatible } from '../shared/type-ref.js';
 import type { C3Parameter, C3Symbol, ParsedDocument } from '../shared/types.js';
 import {
   expressionTypeName,
@@ -623,10 +620,6 @@ function isLocalDeclarationSymbol(symbol: C3Symbol): boolean {
   return symbol.signature.endsWith(';') || symbol.signature.startsWith('var ');
 }
 
-function isBuiltinTypeName(typeName: string): boolean {
-  return builtinTypeNames.has(terminalTypeName(typeName));
-}
-
 function isPlainVoidOptionalType(typeName: string): boolean {
   return /^void[!?~]$/.test(compactTypeText(typeName));
 }
@@ -788,36 +781,6 @@ function hasAttribute(symbol: C3Symbol, name: string): boolean {
     (attribute) => attribute.split('(')[0] === name,
   );
 }
-
-const builtinTypeNames = new Set([
-  'any',
-  'anyfault',
-  'bool',
-  'bfloat',
-  'bfloat16',
-  'char',
-  'double',
-  'float',
-  'float16',
-  'float128',
-  'ichar',
-  'int',
-  'int128',
-  'iptr',
-  'isz',
-  'long',
-  'short',
-  'String',
-  'typeid',
-  'uint',
-  'uint128',
-  'ulong',
-  'untypedlist',
-  'uptr',
-  'ushort',
-  'usz',
-  'void',
-]);
 
 function ancestorOfType(
   node: SyntaxNode | null,

@@ -103,6 +103,44 @@ test('hover shows resolved struct type for variables', () => {
   assert.match(value, /struct HttpResponse \{\n    String body;\n\}/);
 });
 
+test('hover shows builtin any details', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'fn void use(any value) {',
+    '    value;',
+    '}',
+    '',
+  ].join('\n');
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+
+  index.upsert(parseSource(uri, source));
+
+  const typeHover = hoverFromResolveResult(
+    index,
+    index.resolveSymbol(uri, 'any', doc.positionAt(source.indexOf('any'))),
+  );
+  const valueHover = hoverFromResolveResult(
+    index,
+    index.resolveSymbol(
+      uri,
+      'value',
+      doc.positionAt(source.lastIndexOf('value')),
+    ),
+  );
+
+  assert.match(
+    hoverValue(typeHover),
+    /struct any \{\n    void\* ptr;\n    typeid type;\n\}/,
+  );
+  assert.match(hoverValue(valueHover), /type:/);
+  assert.match(
+    hoverValue(valueHover),
+    /struct any \{\n    void\* ptr;\n    typeid type;\n\}/,
+  );
+});
+
 function hoverValue(hover: Hover | null): string {
   const contents = hover?.contents;
 

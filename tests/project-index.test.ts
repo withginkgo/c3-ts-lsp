@@ -159,6 +159,84 @@ test('ProjectIndex resolves symbols from child modules of imported modules', () 
   );
 });
 
+test('ProjectIndex resolves implicit std::core child module prefixes', () => {
+  const index = new ProjectIndex();
+  const appUri = 'file:///workspace/app.c3';
+  const stringUri = 'file:///stdlib/std/core/string.c3';
+  const source = [
+    'module app;',
+    'fn void use() {',
+    '    string::format("task");',
+    '}',
+    '',
+  ].join('\n');
+  const doc = TextDocument.create(appUri, 'c3', 1, source);
+
+  index.upsert(parseSource(appUri, source), false);
+  index.upsert(
+    parseSource(
+      stringUri,
+      ['module std::core::string;', 'fn String format(args...) {}', ''].join(
+        '\n',
+      ),
+      { sourceKind: 'stdlib' },
+    ),
+    false,
+  );
+  index.rebuild();
+
+  assert.equal(
+    index.resolveSymbol(
+      appUri,
+      'string::format',
+      doc.positionAt(source.indexOf('string::format')),
+    ).selected?.uri,
+    stringUri,
+  );
+});
+
+test('ProjectIndex models builtin any members', () => {
+  const index = new ProjectIndex();
+  const appUri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'fn void batch_job(any[] args) {',
+    '    int task_id = *(int*)args[0].ptr;',
+    '    typeid task_type = args[0].type;',
+    '}',
+    '',
+  ].join('\n');
+  const doc = TextDocument.create(appUri, 'c3', 1, source);
+
+  index.upsert(parseSource(appUri, source));
+
+  const ptr = index.resolveSymbol(
+    appUri,
+    'ptr',
+    doc.positionAt(source.indexOf('ptr')),
+  );
+  const type = index.resolveSymbol(
+    appUri,
+    'type',
+    doc.positionAt(source.lastIndexOf('type')),
+  );
+
+  assert.equal(ptr.reason, 'resolved');
+  assert.equal(ptr.selected?.returnType, 'void*');
+  assert.equal(type.reason, 'resolved');
+  assert.equal(type.selected?.returnType, 'typeid');
+  assert.deepEqual(
+    index
+      .memberSymbolsForExpression(
+        appUri,
+        'args[0]',
+        doc.positionAt(source.indexOf('args[0]')),
+      )
+      .map((symbol) => symbol.name),
+    ['ptr', 'type'],
+  );
+});
+
 test('ProjectIndex findSymbol ignores unrelated modules', () => {
   const index = new ProjectIndex();
   const appUri = 'file:///workspace/app.c3';
