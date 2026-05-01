@@ -432,6 +432,32 @@ test('parseSource accepts generic field types at the start of struct bodies', ()
   assert.deepEqual(parsed.diagnostics, []);
 });
 
+test('parseSource accepts generic local variable declarations', () => {
+  const parsed = parseSource(
+    'file:///workspace/app.c3',
+    [
+      'module app;',
+      'fn void worker(void* arg) {',
+      '    BufferedChannel{int}* ch = arg;',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  assert.deepEqual(parsed.diagnostics, []);
+});
+
+test('parseSource accepts generic parameter declarations', () => {
+  const parsed = parseSource(
+    'file:///workspace/app.c3',
+    ['module app;', 'fn void worker(BufferedChannel{int}* ch) {', '}', ''].join(
+      '\n',
+    ),
+  );
+
+  assert.deepEqual(parsed.diagnostics, []);
+});
+
 test('parseSource reports missing semicolon after typed initializer', () => {
   const parsed = parseSource(
     'file:///workspace/app.c3',

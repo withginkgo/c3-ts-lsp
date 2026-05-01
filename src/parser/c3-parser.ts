@@ -1503,7 +1503,7 @@ function collectSyntaxDiagnostics(
   const sourceDiagnostics = [
     ...collectDelimiterDiagnostics(doc),
     ...collectMissingTerminatorDiagnostics(doc),
-    ...collectInvalidInitializerSyntaxDiagnostics(doc),
+    ...collectInvalidInitializerSyntaxDiagnostics(doc, root),
   ];
   const diagnostics: Diagnostic[] = [...sourceDiagnostics];
 
@@ -1669,6 +1669,7 @@ function collectMissingTerminatorDiagnostics(doc: TextDocument): Diagnostic[] {
 
 function collectInvalidInitializerSyntaxDiagnostics(
   doc: TextDocument,
+  root: SyntaxNode,
 ): Diagnostic[] {
   const source = doc.getText();
   const diagnostics: Diagnostic[] = [];
@@ -1680,6 +1681,7 @@ function collectInvalidInitializerSyntaxDiagnostics(
     if (updateLexState(source, index, state)) continue;
     if (state.lineComment || state.blockComment || state.stringQuote) continue;
     if (char !== '{') continue;
+    if (isGenericArgumentListOpen(root, index)) continue;
 
     const typeToken = pathTokenBefore(source, index);
     if (!typeToken) continue;
@@ -1698,6 +1700,21 @@ function collectInvalidInitializerSyntaxDiagnostics(
   }
 
   return diagnostics;
+}
+
+function isGenericArgumentListOpen(
+  root: SyntaxNode,
+  braceOffset: number,
+): boolean {
+  for (
+    let node: SyntaxNode | null = root.descendantForIndex(braceOffset);
+    node;
+    node = node.parent
+  ) {
+    if (node.type === 'generic_arg_list') return true;
+  }
+
+  return false;
 }
 
 function needsSemicolonTerminator(line: string): boolean {
