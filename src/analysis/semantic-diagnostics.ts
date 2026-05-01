@@ -517,6 +517,8 @@ function typeReferenceNodes(root: SyntaxNode): SyntaxNode[] {
   const refs: SyntaxNode[] = [];
 
   function visit(node: SyntaxNode): void {
+    if (node.type === 'doc_comment') return;
+
     if (node.type === 'path_type_ident') {
       refs.push(node);
       return;
@@ -575,6 +577,8 @@ function nodesOfTypes(root: SyntaxNode, types: string[]): SyntaxNode[] {
   const found: SyntaxNode[] = [];
 
   function visit(node: SyntaxNode): void {
+    if (node.type === 'doc_comment') return;
+
     if (types.includes(node.type)) found.push(node);
 
     for (const child of node.namedChildren) {

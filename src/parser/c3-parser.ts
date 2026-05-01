@@ -11,6 +11,7 @@ import { TextDocument } from 'vscode-languageserver-textdocument';
 
 import type {
   C3Import,
+  C3Contract,
   C3ModuleAlias,
   C3Parameter,
   C3Symbol,
@@ -440,6 +441,7 @@ function macroSymbol(
   if (!nameNode) return null;
 
   const receiverType = receiverTypeForCallable(node);
+  const macroBody = macroBodyParameter(node);
 
   return createSymbol(doc, node, nameNode, moduleName, SymbolKind.Function, {
     kind: receiverType ? SymbolKind.Method : SymbolKind.Function,
@@ -447,6 +449,8 @@ function macroSymbol(
     children: parameterSymbols(doc, node, moduleName, undefined, receiverType),
     parameters: parameterSignatures(node),
     parameterDetails: parameterDetails(node, receiverType),
+    macroBodyName: macroBody?.name,
+    macroBodyParameters: macroBody?.parameters,
     returnType: header?.childForFieldName('return_type')?.text,
     receiverType,
     signature: `macro ${callableSignature(
@@ -611,13 +615,18 @@ function parameterSymbols(
   const symbols: C3Symbol[] = [];
   let receiverParamAssigned = false;
 
-  for (const param of descendantsOfType(node, 'param')) {
-    const nameNode = param.childForFieldName('name');
+  for (const param of callableParameterNodes(node)) {
+    const nameNode = parameterNameNode(param);
     if (!nameNode) continue;
 
-    const explicitType = param.childForFieldName('type')?.text;
+    const explicitTypeNode = param.childForFieldName('type');
+    const explicitType = explicitTypeNode?.text;
+    const typeNodeIsName =
+      !!explicitTypeNode && sameSyntaxNode(explicitTypeNode, nameNode);
     const inferredReceiverType =
-      !explicitType && receiverType && !receiverParamAssigned
+      (!explicitType || typeNodeIsName) &&
+      receiverType &&
+      !receiverParamAssigned
         ? receiverType
         : undefined;
 
@@ -628,32 +637,40 @@ function parameterSymbols(
     symbols.push(
       createSymbol(doc, param, nameNode, moduleName, SymbolKind.Variable, {
         signature: declarationSignature(param),
-        returnType: explicitType ?? inferredReceiverType,
+        returnType: typeNodeIsName
+          ? inferredReceiverType
+          : (explicitType ?? inferredReceiverType),
         scopeRange,
       }),
     );
   }
 
-  for (const trailingBlockParam of descendantsOfType(
-    node,
-    'trailing_block_param',
-  )) {
+  const trailingBlockParam = directTrailingBlockParam(node);
+  if (trailingBlockParam) {
     const nameNode = directChildOfType(trailingBlockParam, 'at_ident');
-    if (!nameNode) continue;
 
-    symbols.push(
-      createSymbol(
-        doc,
-        trailingBlockParam,
-        nameNode,
-        moduleName,
-        SymbolKind.Variable,
-        {
-          signature: compactText(trailingBlockParam.text),
-          scopeRange,
-        },
-      ),
-    );
+    if (nameNode) {
+      const macroBody = macroBodyParameter(node);
+
+      symbols.push(
+        createSymbol(
+          doc,
+          trailingBlockParam,
+          nameNode,
+          moduleName,
+          SymbolKind.Variable,
+          {
+            signature: compactText(trailingBlockParam.text),
+            kind: SymbolKind.Function,
+            parameters: macroBody?.parameters.map(
+              (parameter) => parameter.label,
+            ),
+            parameterDetails: macroBody?.parameters,
+            scopeRange,
+          },
+        ),
+      );
+    }
   }
 
   return symbols;
@@ -754,6 +771,40 @@ function localDeclarationSymbols(
   symbols.push(...foreachVariableSymbols(doc, scopeRoot, moduleName));
   symbols.push(...forInitializerSymbols(doc, scopeRoot, moduleName, options));
   symbols.push(...conditionalUnwrapVariableSymbols(doc, scopeRoot, moduleName));
+  symbols.push(...callBodyParameterSymbols(doc, scopeRoot, moduleName));
+
+  return symbols;
+}
+
+function callBodyParameterSymbols(
+  doc: TextDocument,
+  scopeRoot: SyntaxNode,
+  moduleName: string,
+): C3Symbol[] {
+  const symbols: C3Symbol[] = [];
+
+  for (const call of descendantsOfType(scopeRoot, 'call_expr')) {
+    const trailing = call.childForFieldName('trailing');
+    const args = call.childForFieldName('arguments');
+    if (!trailing || !args) continue;
+
+    const scopeRange = rangeFromNode(trailing);
+
+    for (const param of directChildrenOfType(args, 'param')) {
+      const nameNode = parameterNameNode(param);
+      if (!nameNode) continue;
+
+      const explicitTypeNode = param.childForFieldName('type');
+
+      symbols.push(
+        createSymbol(doc, param, nameNode, moduleName, SymbolKind.Variable, {
+          signature: compactText(param.text),
+          returnType: explicitTypeNode?.text,
+          scopeRange,
+        }),
+      );
+    }
+  }
 
   return symbols;
 }
@@ -1326,6 +1377,9 @@ function createSymbol(
     implementedInterfaces?: string[];
     parameters?: string[];
     parameterDetails?: C3Parameter[];
+    macroBodyName?: string;
+    macroBodyParameters?: C3Parameter[];
+    contracts?: C3Contract[];
     scopeRange?: Range;
   },
 ): C3Symbol {
@@ -1345,6 +1399,9 @@ function createSymbol(
     implementedInterfaces: options.implementedInterfaces,
     parameters: options.parameters ?? [],
     parameterDetails: options.parameterDetails,
+    macroBodyName: options.macroBodyName,
+    macroBodyParameters: options.macroBodyParameters,
+    contracts: options.contracts ?? contractsFor(node),
     scopeRange: options.scopeRange,
     children: options.children ?? [],
   };
@@ -1394,20 +1451,22 @@ function identifierListNames(node: SyntaxNode): SyntaxNode[] {
 }
 
 function parameterSignatures(node: SyntaxNode): string[] {
-  return descendantsOfType(node, 'param').map((param) =>
-    compactText(param.text),
-  );
+  return callableParameterNodes(node).map((param) => compactText(param.text));
 }
 
 function parameterDetails(
   node: SyntaxNode,
   receiverType: string | undefined,
 ): C3Parameter[] {
-  return descendantsOfType(node, 'param').map((param, index) => {
+  return callableParameterNodes(node).map((param, index) => {
     const label = compactText(param.text);
     const detail = parameterDetailFromLabel(label, index, receiverType);
-    const name = param.childForFieldName('name')?.text ?? detail.name;
-    const explicitType = param.childForFieldName('type')?.text;
+    const nameNode = parameterNameNode(param);
+    const explicitTypeNode = param.childForFieldName('type');
+    const explicitType =
+      explicitTypeNode && !sameSyntaxNode(explicitTypeNode, nameNode)
+        ? explicitTypeNode.text
+        : undefined;
     const paramDefault = directChildOfType(param, 'param_default');
     const defaultValue = paramDefault?.childForFieldName('right')?.text;
     const baseEnd = paramDefault
@@ -1417,7 +1476,7 @@ function parameterDetails(
 
     return {
       ...detail,
-      name,
+      name: nameNode?.text ?? detail.name,
       type: explicitType ?? detail.type,
       optional: !!paramDefault,
       variadic: /\.\.\./.test(baseText),
@@ -1425,6 +1484,61 @@ function parameterDetails(
       receiver: !!receiverType && index === 0,
     };
   });
+}
+
+function callableParameterNodes(node: SyntaxNode): SyntaxNode[] {
+  const paramList =
+    directChildOfType(node, 'func_param_list') ??
+    directChildOfType(node, 'macro_param_list') ??
+    directChildOfType(node, 'attribute_param_list');
+
+  return paramList ? directChildrenOfType(paramList, 'param') : [];
+}
+
+function parameterNameNode(param: SyntaxNode): SyntaxNode | null {
+  const name = param.childForFieldName('name');
+  if (name) return name;
+
+  const type = param.childForFieldName('type');
+  if (type?.text.startsWith('$')) return type;
+
+  return null;
+}
+
+function directTrailingBlockParam(node: SyntaxNode): SyntaxNode | null {
+  const paramList = directChildOfType(node, 'macro_param_list');
+  return paramList
+    ? directChildOfType(paramList, 'trailing_block_param')
+    : null;
+}
+
+function macroBodyParameter(
+  node: SyntaxNode,
+): { name: string; parameters: C3Parameter[] } | undefined {
+  const trailingBlockParam = directTrailingBlockParam(node);
+  const nameNode = trailingBlockParam
+    ? directChildOfType(trailingBlockParam, 'at_ident')
+    : null;
+  if (!trailingBlockParam || !nameNode) return undefined;
+
+  const paramList = directChildOfType(trailingBlockParam, 'func_param_list');
+  const params = paramList ? directChildrenOfType(paramList, 'param') : [];
+
+  return {
+    name: nameNode.text,
+    parameters: params.map((param, index) => {
+      const label = compactText(param.text);
+      const detail = parameterDetailFromLabel(label, index);
+      const explicitTypeNode = param.childForFieldName('type');
+      const name = parameterNameNode(param)?.text ?? detail.name;
+
+      return {
+        ...detail,
+        name,
+        type: explicitTypeNode?.text ?? detail.type,
+      };
+    }),
+  };
 }
 
 function receiverTypeForCallable(node: SyntaxNode): string | undefined {
@@ -1491,6 +1605,68 @@ function documentationFor(node: SyntaxNode): string | undefined {
   }
 
   return undefined;
+}
+
+function contractsFor(node: SyntaxNode): C3Contract[] {
+  const docComment = directChildOfType(node, 'doc_comment');
+  if (!docComment) return [];
+
+  return directChildrenOfType(docComment, 'doc_comment_contract').flatMap(
+    (contract) => {
+      const nameNode = contract.childForFieldName('name');
+      if (!nameNode) return [];
+
+      const parameterNode = contract.childForFieldName('parameter');
+      const modifierNode = contract.childForFieldName('mutability_contract');
+      const descriptionNode = contract.childForFieldName('description');
+      const expressionNodes = contract.namedChildren.filter(
+        (child) =>
+          !sameSyntaxNode(child, nameNode) &&
+          !sameSyntaxNode(child, parameterNode) &&
+          !sameSyntaxNode(child, modifierNode) &&
+          !sameSyntaxNode(child, descriptionNode),
+      );
+
+      return [
+        {
+          kind: contractKind(nameNode.text),
+          name: nameNode.text,
+          range: rangeFromNode(contract),
+          expressions: expressionNodes.map((expr) => compactText(expr.text)),
+          expressionRanges: expressionNodes.map(rangeFromNode),
+          parameter: parameterNode?.text,
+          parameterRange: parameterNode
+            ? rangeFromNode(parameterNode)
+            : undefined,
+          modifier: modifierNode?.text,
+          description: descriptionNode
+            ? stringDescriptionText(descriptionNode.text)
+            : undefined,
+        },
+      ];
+    },
+  );
+}
+
+function contractKind(name: string): C3Contract['kind'] {
+  switch (name) {
+    case '@require':
+      return 'require';
+    case '@ensure':
+      return 'ensure';
+    case '@param':
+      return 'param';
+    case '@return':
+      return 'return';
+    case '@pure':
+      return 'pure';
+    default:
+      return 'other';
+  }
+}
+
+function stringDescriptionText(text: string): string {
+  return cleanCommentText(text).replace(/^"|"$/g, '').replace(/^`|`$/g, '');
 }
 
 function cleanCommentText(text: string): string {
@@ -2309,6 +2485,18 @@ function directChildrenOfTypes(
   types: string[],
 ): SyntaxNode[] {
   return node.namedChildren.filter((child) => types.includes(child.type));
+}
+
+function sameSyntaxNode(
+  left: SyntaxNode | null | undefined,
+  right: SyntaxNode | null | undefined,
+): boolean {
+  return (
+    !!left &&
+    !!right &&
+    left.startIndex === right.startIndex &&
+    left.endIndex === right.endIndex
+  );
 }
 
 function descendantsOfType(node: SyntaxNode, type: string): SyntaxNode[] {

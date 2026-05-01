@@ -145,6 +145,65 @@ test('semanticDiagnostics resolves local consts in compile-time asserts', () => 
   assert.deepEqual(semanticDiagnostics(index, parsed), []);
 });
 
+test('semanticDiagnostics evaluates simple compile-time assertions', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'const int N = 2;',
+      'fn void use() {',
+      '    $assert(N == 2): "ok";',
+      '    $assert(N == 3): "bad";',
+      '    $if N: int x; $endif',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(
+    semanticDiagnostics(index, parsed).map((diagnostic) => diagnostic.message),
+    [
+      'Compile-time assertion is always false: "bad"',
+      "compile-time condition should be 'bool', got 'int'",
+    ],
+  );
+});
+
+test('semanticDiagnostics handles contracts without treating them as ordinary references', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      '<*',
+      ' @ensure return == value',
+      ' @require value > 0 : "value positive"',
+      ' @param [in] out',
+      '*>',
+      'fn int checked(int value, int* out) {',
+      '    return value;',
+      '}',
+      'fn void use() {',
+      '    int out;',
+      '    checked(0, &out);',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(
+    semanticDiagnostics(index, parsed).map((diagnostic) => diagnostic.message),
+    ["Call to 'checked' violates @require: value positive"],
+  );
+});
+
 test('semanticDiagnostics accepts implicitly imported std::core symbols', () => {
   const index = new ProjectIndex();
   const app = parseSource(
@@ -448,6 +507,35 @@ test('semanticDiagnostics accepts self members inside type methods', () => {
   index.upsert(parsed);
 
   assert.deepEqual(semanticDiagnostics(index, parsed), []);
+});
+
+test('semanticDiagnostics validates macro trailing body arguments', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'macro void @with(int x; @body(int y)) {',
+      '    @body(x);',
+      '}',
+      'fn void use() {',
+      '    @with(1; int y) {',
+      '        y;',
+      '    };',
+      '    @with(1) {',
+      '    };',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(
+    semanticDiagnostics(index, parsed).map((diagnostic) => diagnostic.message),
+    ['Not enough parameters for the macro body, expected 1'],
+  );
 });
 
 test('semanticDiagnostics reports methods without receiver parameters', () => {

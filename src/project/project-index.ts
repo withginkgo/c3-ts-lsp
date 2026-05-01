@@ -2360,6 +2360,8 @@ function referenceNodes(root: SyntaxNode): SyntaxNode[] {
   const refs: SyntaxNode[] = [];
 
   function visit(node: SyntaxNode): void {
+    if (node.type === 'doc_comment') return;
+
     if (node.type === 'ident_expr') {
       refs.push(node);
       return;
@@ -2378,6 +2380,8 @@ function memberReferenceNodes(root: SyntaxNode): SyntaxNode[] {
   const refs: SyntaxNode[] = [];
 
   function visit(node: SyntaxNode): void {
+    if (node.type === 'doc_comment') return;
+
     if (node.type === 'field_expr') {
       const field = node.childForFieldName('field');
       if (field) refs.push(field);
@@ -2396,6 +2400,8 @@ function typeReferenceNodes(root: SyntaxNode): SyntaxNode[] {
   const refs: SyntaxNode[] = [];
 
   function visit(node: SyntaxNode): void {
+    if (node.type === 'doc_comment') return;
+
     if (node.type === 'path_type_ident') {
       refs.push(node);
       return;

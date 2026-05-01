@@ -331,6 +331,51 @@ test('parseSource extracts callable parameter metadata', () => {
   );
 });
 
+test('parseSource extracts doc contracts and macro trailing body parameters', () => {
+  const parsed = parseSource(
+    'file:///workspace/app.c3',
+    [
+      'module app;',
+      '<*',
+      ' @require value > 0 : "positive"',
+      ' @ensure return == value',
+      ' @param [in] out',
+      '*>',
+      'fn int checked(int value, int* out) { return value; }',
+      'macro void @with(int x; @body(int y)) {',
+      '    @body(x);',
+      '}',
+      '',
+    ].join('\n'),
+  );
+  const checked = parsed.symbols.find((symbol) => symbol.name === 'checked');
+  const withMacro = parsed.symbols.find((symbol) => symbol.name === '@with');
+
+  assert.deepEqual(
+    checked?.contracts?.map((contract) => [
+      contract.kind,
+      contract.expressions,
+      contract.parameter,
+      contract.modifier,
+      contract.description,
+    ]),
+    [
+      ['require', ['value > 0'], undefined, undefined, 'positive'],
+      ['ensure', ['return == value'], undefined, undefined, undefined],
+      ['param', [], 'out', '[in]', undefined],
+    ],
+  );
+  assert.deepEqual(withMacro?.parameters, ['int x']);
+  assert.equal(withMacro?.macroBodyName, '@body');
+  assert.deepEqual(
+    withMacro?.macroBodyParameters?.map((parameter) => [
+      parameter.name,
+      parameter.type,
+    ]),
+    [['y', 'int']],
+  );
+});
+
 test('parseSource reports tree-sitter syntax diagnostics', () => {
   const parsed = parseSource(
     'file:///workspace/broken.c3',

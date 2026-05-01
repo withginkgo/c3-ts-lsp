@@ -21,6 +21,9 @@ export type C3Symbol = {
   implementedInterfaces?: string[];
   parameters: string[];
   parameterDetails?: C3Parameter[];
+  macroBodyName?: string;
+  macroBodyParameters?: C3Parameter[];
+  contracts?: C3Contract[];
   scopeRange?: Range;
   children: C3Symbol[];
 };
@@ -33,6 +36,26 @@ export type C3Parameter = {
   variadic: boolean;
   defaultValue?: string;
   receiver?: boolean;
+};
+
+export type C3ContractKind =
+  | 'require'
+  | 'ensure'
+  | 'param'
+  | 'return'
+  | 'pure'
+  | 'other';
+
+export type C3Contract = {
+  kind: C3ContractKind;
+  name: string;
+  range: Range;
+  expressions: string[];
+  expressionRanges: Range[];
+  parameter?: string;
+  parameterRange?: Range;
+  modifier?: string;
+  description?: string;
 };
 
 export type C3Import = {

@@ -16,6 +16,8 @@ import {
 } from '../shared/calls.js';
 import { terminalTypeName, typeNamesCompatible } from '../shared/type-ref.js';
 import type { C3Parameter, C3Symbol, ParsedDocument } from '../shared/types.js';
+import { compileTimeDiagnostics } from './compile-time-diagnostics.js';
+import { contractDiagnostics } from './contract-diagnostics.js';
 import { returnDiagnostics } from './return-diagnostics.js';
 import {
   declarationDiagnostics,
@@ -67,6 +69,8 @@ function fullSemanticDiagnostics(
     ...duplicateCallableDiagnostics(index, parsed),
     ...declarationDiagnostics(index, parsed),
     ...methodReceiverDiagnostics(parsed),
+    ...contractDiagnostics(index, parsed),
+    ...compileTimeDiagnostics(index, parsed),
     ...typeReferenceDiagnostics(index, parsed),
     ...interfaceImplementationDiagnostics(index, parsed),
     ...returnValueDiagnostics,
@@ -84,6 +88,8 @@ function recoverableSemanticDiagnostics(
     ...duplicateCallableDiagnostics(index, parsed),
     ...declarationDiagnostics(index, parsed),
     ...methodReceiverDiagnostics(parsed),
+    ...contractDiagnostics(index, parsed),
+    ...compileTimeDiagnostics(index, parsed),
     ...typeReferenceDiagnostics(index, parsed),
     ...callDiagnostics(index, parsed),
     ...expressionDiagnostics(index, parsed),
@@ -257,7 +263,85 @@ function callDiagnostics(
         callArguments(call),
         rangeFromNode(call),
       ),
+      ...validateMacroBodyArguments(symbol, call),
     );
+  }
+
+  return diagnostics;
+}
+
+function validateMacroBodyArguments(
+  symbol: C3Symbol,
+  call: SyntaxNode,
+): Diagnostic[] {
+  const expected = symbol.macroBodyParameters ?? [];
+  const trailing = call.childForFieldName('trailing');
+  const args = call.childForFieldName('arguments');
+  const supplied = args ? directChildrenOfType(args, 'param') : [];
+  const diagnostics: Diagnostic[] = [];
+
+  if (supplied.length > 0 && !symbol.macroBodyName) {
+    diagnostics.push({
+      severity: DiagnosticSeverity.Error,
+      range: rangeFromNode(supplied[0]!),
+      message: `Only macro calls with a trailing body parameter may have body arguments`,
+      source: diagnosticSource,
+    });
+  }
+
+  if (trailing && !symbol.macroBodyName) {
+    diagnostics.push({
+      severity: DiagnosticSeverity.Error,
+      range: rangeFromNode(trailing),
+      message: `This macro does not support trailing statements, please remove it`,
+      source: diagnosticSource,
+    });
+    return diagnostics;
+  }
+
+  if (!symbol.macroBodyName) return diagnostics;
+
+  if (!trailing) {
+    diagnostics.push({
+      severity: DiagnosticSeverity.Error,
+      range: rangeFromNode(call),
+      message: `Expected call to have a trailing statement for '${symbol.macroBodyName}'`,
+      source: diagnosticSource,
+    });
+  }
+
+  if (expected.length > supplied.length) {
+    diagnostics.push({
+      severity: DiagnosticSeverity.Error,
+      range: rangeFromNode(call),
+      message: `Not enough parameters for the macro body, expected ${expected.length}`,
+      source: diagnosticSource,
+    });
+    return diagnostics;
+  }
+
+  if (expected.length < supplied.length) {
+    diagnostics.push({
+      severity: DiagnosticSeverity.Error,
+      range: rangeFromNode(supplied[expected.length] ?? call),
+      message: `Too many parameters for the macro body, expected ${expected.length}`,
+      source: diagnosticSource,
+    });
+    return diagnostics;
+  }
+
+  for (let index = 0; index < expected.length; index++) {
+    const expectedType = expected[index]?.type;
+    const actualType = supplied[index]?.childForFieldName('type')?.text;
+    if (!expectedType || !actualType) continue;
+    if (typeNamesCompatible(actualType, expectedType)) continue;
+
+    diagnostics.push({
+      severity: DiagnosticSeverity.Error,
+      range: rangeFromNode(supplied[index]!),
+      message: `Macro body parameter '${expected[index]?.name ?? index + 1}' should be '${expectedType}', got '${actualType}'`,
+      source: diagnosticSource,
+    });
   }
 
   return diagnostics;
@@ -499,10 +583,16 @@ function sameNode(a: SyntaxNode, b: SyntaxNode): boolean {
   );
 }
 
+function directChildrenOfType(node: SyntaxNode, type: string): SyntaxNode[] {
+  return node.namedChildren.filter((child) => child.type === type);
+}
+
 function referenceNodes(root: SyntaxNode): SyntaxNode[] {
   const refs: SyntaxNode[] = [];
 
   function visit(node: SyntaxNode): void {
+    if (node.type === 'doc_comment') return;
+
     if (node.type === 'ident_expr') {
       refs.push(node);
       return;
@@ -521,6 +611,8 @@ function memberReferenceNodes(root: SyntaxNode): SyntaxNode[] {
   const refs: SyntaxNode[] = [];
 
   function visit(node: SyntaxNode): void {
+    if (node.type === 'doc_comment') return;
+
     if (node.type === 'field_expr') {
       const field = node.childForFieldName('field');
       if (field) refs.push(field);
