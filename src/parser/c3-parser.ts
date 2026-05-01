@@ -753,6 +753,7 @@ function localDeclarationSymbols(
 
   symbols.push(...foreachVariableSymbols(doc, scopeRoot, moduleName));
   symbols.push(...forInitializerSymbols(doc, scopeRoot, moduleName, options));
+  symbols.push(...conditionalUnwrapVariableSymbols(doc, scopeRoot, moduleName));
 
   return symbols;
 }
@@ -878,6 +879,63 @@ function foreachVariableSymbols(
         ),
       );
     }
+  }
+
+  return symbols;
+}
+
+function conditionalUnwrapVariableSymbols(
+  doc: TextDocument,
+  scopeRoot: SyntaxNode,
+  moduleName: string,
+): C3Symbol[] {
+  const symbols: C3Symbol[] = [];
+
+  for (const unwrap of [
+    ...descendantsOfType(scopeRoot, 'catch_unwrap'),
+    ...descendantsOfType(scopeRoot, 'try_unwrap'),
+  ]) {
+    const nameNode = directChildOfType(unwrap, 'ident');
+    if (!nameNode) continue;
+
+    const owner = nearestAncestorOfTypes(unwrap, [
+      'if_stmt',
+      'while_stmt',
+      'for_stmt',
+      'switch_stmt',
+    ]);
+    if (!owner) continue;
+
+    const body = owner.childForFieldName('body');
+    const typeNode = directChildOfType(unwrap, 'type');
+    const signature = compactText(unwrap.text);
+    const returnType = typeNode?.text;
+
+    if (body) {
+      symbols.push(
+        createSymbol(doc, unwrap, nameNode, moduleName, SymbolKind.Variable, {
+          signature,
+          returnType,
+          scopeRange: rangeFromNode(body),
+        }),
+      );
+    }
+
+    if (unwrap.type !== 'try_unwrap') continue;
+
+    const condition = nearestAncestorOfTypes(unwrap, [
+      'paren_cond',
+      'for_cond',
+    ]);
+    if (!condition || condition.endIndex <= unwrap.endIndex) continue;
+
+    symbols.push(
+      createSymbol(doc, unwrap, nameNode, moduleName, SymbolKind.Variable, {
+        signature,
+        returnType,
+        scopeRange: rangeFromOffsets(doc, unwrap.endIndex, condition.endIndex),
+      }),
+    );
   }
 
   return symbols;

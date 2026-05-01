@@ -686,6 +686,34 @@ test('semanticDiagnostics accepts handled optional call results and may-discard 
   assert.deepEqual(semanticDiagnostics(index, parsed), []);
 });
 
+test('semanticDiagnostics resolves catch unwrap variables in their body scope', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'const int CHANNEL_CLOSED = 1;',
+      'fn int? pop();',
+      'fn void run() {',
+      '    int? result = pop();',
+      '    if (catch err = result) {',
+      '        if (err == CHANNEL_CLOSED) {}',
+      '    }',
+      '    err;',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(
+    semanticDiagnostics(index, parsed).map((diagnostic) => diagnostic.message),
+    ["Undefined variable 'err'"],
+  );
+});
+
 test('semanticDiagnostics validates rethrow propagation context', () => {
   const index = new ProjectIndex();
   const uri = 'file:///workspace/app.c3';

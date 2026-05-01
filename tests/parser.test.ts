@@ -728,6 +728,46 @@ test('parseSource extracts for initializer declarations as scoped symbols', () =
   assert.equal(symbol?.scopeRange?.end.line, 4);
 });
 
+test('parseSource extracts conditional unwrap variables as scoped symbols', () => {
+  const parsed = parseSource(
+    'file:///workspace/app.c3',
+    [
+      'module app;',
+      'fn void use() {',
+      '    int? result = pop();',
+      '    if (catch err = result) {',
+      '        err;',
+      '    }',
+      '    if (try int value = pop() && value > 0) {',
+      '        value;',
+      '    }',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  const err = parsed.scopedSymbols.find((symbol) => symbol.name === 'err');
+  const valueSymbols = parsed.scopedSymbols.filter(
+    (symbol) => symbol.name === 'value',
+  );
+
+  assert.equal(err?.signature, 'catch err = result');
+  assert.equal(err?.scopeRange?.start.line, 3);
+  assert.equal(err?.scopeRange?.end.line, 5);
+  assert.deepEqual(
+    valueSymbols.map((symbol) => [
+      symbol.signature,
+      symbol.returnType,
+      symbol.scopeRange?.start.line,
+      symbol.scopeRange?.end.line,
+    ]),
+    [
+      ['try int value = pop()', 'int', 6, 8],
+      ['try int value = pop()', 'int', 6, 6],
+    ],
+  );
+});
+
 test('parseSource skips unsafe var declarations in normal functions', () => {
   const parsed = parseSource(
     'file:///workspace/app.c3',
