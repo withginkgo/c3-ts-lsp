@@ -987,6 +987,7 @@ export class ProjectIndex {
     position: Position,
   ): C3Symbol[] {
     const symbols: C3Symbol[] = [];
+    const shadowedNames = new Set<string>();
 
     for (const expandedTypeName of this.expandTypeAliases(
       current,
@@ -1001,15 +1002,22 @@ export class ProjectIndex {
         ...(typeSymbol?.children ?? []),
         ...this.methodSymbolsForTypeName(current, expandedTypeName, typeSymbol),
       ];
-
-      symbols.push(
+      const expansionMembers = [
         ...concreteMembers,
         ...this.interfaceMemberSymbolsForType(
           current,
           typeSymbol,
           concreteMembers,
         ),
+      ];
+
+      symbols.push(
+        ...expansionMembers.filter((member) => !shadowedNames.has(member.name)),
       );
+
+      for (const member of expansionMembers) {
+        shadowedNames.add(member.name);
+      }
     }
 
     return uniqueSymbols(symbols).sort(compareSymbols);

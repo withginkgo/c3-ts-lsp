@@ -688,6 +688,63 @@ test('ProjectIndex resolves self members and type methods', () => {
   assert.equal(method.selected?.signature, 'void EventLoop.init(&self)');
 });
 
+test('ProjectIndex lets alias receiver methods shadow target type methods', () => {
+  const index = new ProjectIndex();
+  const appUri = 'file:///workspace/app.c3';
+  const threadUri = 'file:///stdlib/std/threads/thread.c3';
+  const osUri = 'file:///stdlib/std/threads/os/thread_posix.c3';
+  const appSource = [
+    'module app;',
+    'import std::thread;',
+    'fn void run() {',
+    '    Thread producer_thread;',
+    '    producer_thread.create();',
+    '}',
+    '',
+  ].join('\n');
+  const doc = TextDocument.create(appUri, 'c3', 1, appSource);
+
+  index.upsert(parseSource(appUri, appSource), false);
+  index.upsert(
+    parseSource(
+      threadUri,
+      [
+        'module std::thread;',
+        'import std::thread::os;',
+        'typedef Thread = inline NativeThread;',
+        'macro void Thread.create(&thread) {}',
+        '',
+      ].join('\n'),
+      { sourceKind: 'stdlib' },
+    ),
+    false,
+  );
+  index.upsert(
+    parseSource(
+      osUri,
+      [
+        'module std::thread::os;',
+        'struct NativeThread {}',
+        'fn void NativeThread.create(&thread) {}',
+        '',
+      ].join('\n'),
+      { sourceKind: 'stdlib' },
+    ),
+    false,
+  );
+  index.rebuild();
+
+  const result = index.resolveSymbol(
+    appUri,
+    'create',
+    doc.positionAt(appSource.indexOf('create();')),
+  );
+
+  assert.equal(result.reason, 'resolved');
+  assert.equal(result.selected?.uri, threadUri);
+  assert.equal(result.selected?.signature, 'macro void Thread.create(&thread)');
+});
+
 test('ProjectIndex exposes interface methods on implementing struct types', () => {
   const index = new ProjectIndex();
   const uri = 'file:///workspace/app.c3';

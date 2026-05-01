@@ -255,6 +255,50 @@ test('semanticDiagnostics accepts resolved members', () => {
   assert.deepEqual(semanticDiagnostics(index, parsed), []);
 });
 
+test('semanticDiagnostics resolves alias receiver methods without target ambiguity', () => {
+  const index = new ProjectIndex();
+  const app = parseSource(
+    'file:///workspace/app.c3',
+    [
+      'module app;',
+      'import std::thread;',
+      'fn void run() {',
+      '    Thread producer_thread;',
+      '    producer_thread.create();',
+      '}',
+      '',
+    ].join('\n'),
+  );
+  const thread = parseSource(
+    'file:///stdlib/std/threads/thread.c3',
+    [
+      'module std::thread;',
+      'import std::thread::os;',
+      'typedef Thread = inline NativeThread;',
+      'macro void Thread.create(&thread) {}',
+      '',
+    ].join('\n'),
+    { sourceKind: 'stdlib' },
+  );
+  const os = parseSource(
+    'file:///stdlib/std/threads/os/thread_posix.c3',
+    [
+      'module std::thread::os;',
+      'struct NativeThread {}',
+      'fn void NativeThread.create(&thread) {}',
+      '',
+    ].join('\n'),
+    { sourceKind: 'stdlib' },
+  );
+
+  index.upsert(app, false);
+  index.upsert(thread, false);
+  index.upsert(os, false);
+  index.rebuild();
+
+  assert.deepEqual(semanticDiagnostics(index, app), []);
+});
+
 test('semanticDiagnostics accepts type-qualified enum and constdef constants', () => {
   const index = new ProjectIndex();
   const app = parseSource(

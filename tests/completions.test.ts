@@ -468,6 +468,72 @@ test('completionItems inserts parens for method call completions', () => {
   );
 });
 
+test('completionItems lets alias receiver methods shadow target type methods', () => {
+  const index = new ProjectIndex();
+  const appUri = 'file:///workspace/app.c3';
+  const appSource = [
+    'module app;',
+    'import std::thread;',
+    'fn void run() {',
+    '    Thread producer_thread;',
+    '    producer_thread.',
+    '}',
+    '',
+  ].join('\n');
+  const parsed = parseSource(appUri, appSource);
+  const doc = TextDocument.create(appUri, 'c3', 1, appSource);
+
+  index.upsert(parsed, false);
+  index.upsert(
+    parseSource(
+      'file:///stdlib/std/threads/thread.c3',
+      [
+        'module std::thread;',
+        'import std::thread::os;',
+        'typedef Thread = inline NativeThread;',
+        'macro void Thread.create(&thread) {}',
+        '',
+      ].join('\n'),
+      { sourceKind: 'stdlib' },
+    ),
+    false,
+  );
+  index.upsert(
+    parseSource(
+      'file:///stdlib/std/threads/os/thread_posix.c3',
+      [
+        'module std::thread::os;',
+        'struct NativeThread {}',
+        'fn void NativeThread.create(&thread) {}',
+        '',
+      ].join('\n'),
+      { sourceKind: 'stdlib' },
+    ),
+    false,
+  );
+  index.rebuild();
+
+  const items = completionItems(
+    index,
+    doc,
+    parsed,
+    doc.positionAt(
+      appSource.indexOf('producer_thread.') + 'producer_thread.'.length,
+    ),
+  );
+
+  assert.deepEqual(
+    items.map((item) => [item.label, item.kind, item.detail]),
+    [
+      [
+        'create',
+        CompletionItemKind.Method,
+        'macro void Thread.create(&thread)',
+      ],
+    ],
+  );
+});
+
 test('completionItems returns members for incomplete member access', () => {
   const index = new ProjectIndex();
   const uri = 'file:///workspace/app.c3';
