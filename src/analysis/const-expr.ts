@@ -12,6 +12,11 @@ export type ConstExprKind =
   | { kind: 'not_const'; reason: string }
   | { kind: 'unknown'; reason: string };
 
+export type GlobalInitExprKind =
+  | { kind: 'valid' }
+  | { kind: 'invalid'; reason: string }
+  | { kind: 'unknown'; reason: string };
+
 export type ConstExprContext = {
   index: ProjectIndex;
   parsed: ParsedDocument;
@@ -19,6 +24,7 @@ export type ConstExprContext = {
 };
 
 const constExpr: ConstExprKind = { kind: 'const' };
+const validGlobalInitExpr: GlobalInitExprKind = { kind: 'valid' };
 
 const allowedUnaryConstOperators = new Set(['+', '-', '!', '~']);
 const allowedBinaryConstOperators = new Set([
@@ -74,6 +80,17 @@ export function checkConstExpr(
   context: ConstExprContext,
 ): ConstExprKind {
   return checkConstExprNode(expression, {
+    ...context,
+    visitedConstSymbols: context.visitedConstSymbols ?? new Set(),
+  });
+}
+
+export function checkGlobalInitExpr(
+  expression: SyntaxNode,
+  expectedType: string | undefined,
+  context: ConstExprContext,
+): GlobalInitExprKind {
+  return checkGlobalInitExprNode(expression, expectedType, {
     ...context,
     visitedConstSymbols: context.visitedConstSymbols ?? new Set(),
   });
@@ -250,6 +267,106 @@ function checkCallConstExpr(
   return notConst('function calls are not constant expressions');
 }
 
+function checkGlobalInitExprNode(
+  expression: SyntaxNode,
+  expectedType: string | undefined,
+  context: Required<ConstExprContext>,
+): GlobalInitExprKind {
+  const constResult = checkConstExprNode(expression, context);
+  if (constResult.kind === 'const') return validGlobalInitExpr;
+
+  switch (expression.type) {
+    case 'paren_expr': {
+      const inner = expression.namedChildren[0];
+      return inner
+        ? checkGlobalInitExprNode(inner, expectedType, context)
+        : unknownGlobalInit('parenthesized expression has no inner expression');
+    }
+
+    case 'typed_initializer_list': {
+      const typeNode = expression.childForFieldName('type');
+      const initializerList = directChildOfType(expression, 'initializer_list');
+      return initializerList
+        ? checkInitializerListGlobalInitExpr(
+            initializerList,
+            typeNode?.text ?? expectedType,
+            context,
+          )
+        : unknownGlobalInit('typed initializer has no initializer list');
+    }
+
+    case 'initializer_list':
+      return checkInitializerListGlobalInitExpr(
+        expression,
+        expectedType,
+        context,
+      );
+
+    case 'cast_expr': {
+      const aggregateList = castInitializerList(expression);
+      if (aggregateList) {
+        const typeNode = expression.childForFieldName('type');
+        return checkInitializerListGlobalInitExpr(
+          aggregateList,
+          typeNode?.text ?? expectedType,
+          context,
+        );
+      }
+
+      return constResult.kind === 'unknown'
+        ? unknownGlobalInit(constResult.reason)
+        : invalidGlobalInit(constResult.reason);
+    }
+
+    case 'call_expr':
+      return constResult.kind === 'unknown'
+        ? unknownGlobalInit(constResult.reason)
+        : invalidGlobalInit('function calls require runtime execution');
+
+    case 'ident_expr':
+    case 'unary_expr':
+    case 'binary_expr':
+    case 'field_expr':
+    case 'subscript_expr':
+    case 'optional_expr':
+    case 'rethrow_expr':
+    case 'lambda_expr':
+      return constResult.kind === 'unknown'
+        ? unknownGlobalInit(constResult.reason)
+        : invalidGlobalInit(constResult.reason);
+
+    default:
+      return constResult.kind === 'unknown'
+        ? unknownGlobalInit(constResult.reason)
+        : invalidGlobalInit(constResult.reason);
+  }
+}
+
+function checkInitializerListGlobalInitExpr(
+  initializerList: SyntaxNode,
+  expectedType: string | undefined,
+  context: Required<ConstExprContext>,
+): GlobalInitExprKind {
+  let firstUnknown: GlobalInitExprKind | undefined;
+
+  for (const element of initializerList.namedChildren) {
+    if (element.type !== 'initializer_element') continue;
+
+    const value = initializerElementValueNode(element);
+    if (!value) continue;
+
+    const result = checkGlobalInitExprNode(value, expectedType, context);
+    if (result.kind === 'invalid') return result;
+    if (result.kind === 'unknown' && !firstUnknown) firstUnknown = result;
+  }
+
+  // TODO: Split global init expression from pure constant expression further.
+  // C3 permits additional static-layout forms such as some address constants
+  // and has stricter rules around self-references; those require type-aware
+  // initializer evaluation rather than this syntactic aggregate walk.
+  return firstUnknown ?? validGlobalInitExpr;
+}
+
 function checkResolvedConstant(
   symbol: C3Symbol,
   context: Required<ConstExprContext>,
@@ -382,8 +499,58 @@ function unknown(reason: string): ConstExprKind {
   return { kind: 'unknown', reason };
 }
 
-// TODO: Split C3 global init expression rules from pure constant-expression
-// rules. The compiler has finer-grained global initializer allowances such as
-// address-of self-reference and other non-runtime-code forms that this LSP pass
-// should model explicitly instead of treating every global initializer as a
-// plain constant expression.
+function invalidGlobalInit(reason: string): GlobalInitExprKind {
+  return { kind: 'invalid', reason };
+}
+
+function unknownGlobalInit(reason: string): GlobalInitExprKind {
+  return { kind: 'unknown', reason };
+}
+
+function castInitializerList(expression: SyntaxNode): SyntaxNode | undefined {
+  const value = expression.childForFieldName('value');
+  if (value?.type === 'initializer_list') return value;
+
+  return directChildOfType(expression, 'initializer_list');
+}
+
+function initializerElementValueNode(
+  element: SyntaxNode,
+): SyntaxNode | undefined {
+  const right = element.childForFieldName('right');
+  if (right) return right;
+
+  for (let index = element.childCount - 1; index >= 0; index--) {
+    const child = element.child(index);
+    if (!child || !isInitializerValueNode(child)) continue;
+
+    return child;
+  }
+
+  return undefined;
+}
+
+function isInitializerValueNode(node: SyntaxNode): boolean {
+  if (node.type === 'param_path') return false;
+  if (['=', ',', '{', '}'].includes(node.type)) return false;
+
+  return node.isNamed || isLiteralToken(node);
+}
+
+function isLiteralToken(node: SyntaxNode): boolean {
+  return ['null', 'true', 'false'].includes(node.type);
+}
+
+function directChildOfType(
+  node: SyntaxNode,
+  type: string,
+): SyntaxNode | undefined {
+  return node.namedChildren.find((child) => child.type === type);
+}
+
+// TODO: Model macro constant expressions that expand without generating
+// runtime code and only consume constant-expression inputs.
+// TODO: Extend global initializer analysis with the C3-only differences from
+// ordinary constant expressions, including valid address constants,
+// address-of self-reference rules, and type-aware validation of aggregate
+// initializers.

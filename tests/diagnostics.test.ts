@@ -1609,12 +1609,92 @@ test('semanticDiagnostics accepts constant global initializers and zero initiali
   assert.deepEqual(semanticDiagnostics(index, parsed), []);
 });
 
-test('semanticDiagnostics reports compound literals in global initializers', () => {
+test('semanticDiagnostics accepts typed aggregate global initializers', () => {
   const index = new ProjectIndex();
   const uri = 'file:///workspace/app.c3';
   const parsed = parseSource(
     uri,
-    ['module test;', 'int[] values = { 1, 2 };', ''].join('\n'),
+    [
+      'module test;',
+      'struct Foo { int x; bool y; }',
+      'Foo f = (Foo){ .x = 1, .y = true };',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(semanticDiagnostics(index, parsed), []);
+});
+
+test('semanticDiagnostics accepts untyped and nested aggregate global initializers', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module test;',
+      'struct Inner { int x; }',
+      'struct Foo { Inner a; int b; }',
+      'Foo f = { .a = { .x = 1 }, .b = 2 };',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(semanticDiagnostics(index, parsed), []);
+});
+
+test('semanticDiagnostics accepts generic module typed aggregate global initializers', () => {
+  const index = new ProjectIndex();
+  const app = parseSource(
+    'file:///workspace/mem_exercise/src/main.c3',
+    [
+      'module mem_exercise;',
+      'import std::collections::result;',
+      'struct Parse_Error {',
+      '    int line;',
+      '    String message;',
+      '}',
+      'Result{int, Parse_Error} test =',
+      '    (Result{int, Parse_Error}){ .is_ok = true, .value = 1 };',
+      '',
+    ].join('\n'),
+  );
+  const result = parseSource(
+    'file:///stdlib/std/collections/result.c3',
+    [
+      'module std::collections::result <OkType, ErrType>;',
+      'struct Result {',
+      '    bool is_ok;',
+      '    OkType value;',
+      '}',
+      'fn Result ok(OkType val) { return {}; }',
+      '',
+    ].join('\n'),
+    { sourceKind: 'stdlib' },
+  );
+
+  index.upsert(app, false);
+  index.upsert(result, false);
+  index.rebuild();
+
+  assert.deepEqual(semanticDiagnostics(index, app), []);
+});
+
+test('semanticDiagnostics reports non-constant aggregate global initializer fields', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module test;',
+      'struct Foo { int x; }',
+      'fn int foo() { return 1; }',
+      'Foo f = (Foo){ .x = foo() };',
+      '',
+    ].join('\n'),
   );
 
   index.upsert(parsed);
@@ -1633,9 +1713,11 @@ test('semanticDiagnostics reports non-constant static and tlocal initializers', 
     [
       'module test;',
       'fn int foo() { return 1; }',
+      'struct Foo { int x; }',
       'fn int main(String[] args) {',
       '    static int a = foo();',
       '    tlocal int b = foo();',
+      '    static Foo f = (Foo){ .x = 1 };',
       '    return 0;',
       '}',
       '',

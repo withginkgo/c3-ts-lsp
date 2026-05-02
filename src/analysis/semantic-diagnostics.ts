@@ -12,7 +12,7 @@ import { callableParameters, isCallableSymbol } from '../shared/callable.js';
 import { callTargetFor } from '../shared/calls.js';
 import { isOptionalTypeName, typeNamesCompatible } from '../shared/type-ref.js';
 import type { C3Parameter, C3Symbol, ParsedDocument } from '../shared/types.js';
-import { checkConstExpr } from './const-expr.js';
+import { checkConstExpr, checkGlobalInitExpr } from './const-expr.js';
 import {
   expressionTypeName,
   isBoolType,
@@ -381,10 +381,27 @@ function globalInitializerDiagnostics(
       continue;
     }
 
+    if (context.isConst) {
+      const result = checkConstExpr(value, { index, parsed });
+      if (result.kind !== 'not_const') continue;
+
+      diagnostics.push({
+        severity: DiagnosticSeverity.Error,
+        range: rangeFromNode(value),
+        message: 'The expression must be a constant value.',
+        source: diagnosticSource,
+      });
+      continue;
+    }
+
     if (!context.requiresGlobalInitExpression) continue;
 
-    const result = checkConstExpr(value, { index, parsed });
-    if (result.kind !== 'not_const') continue;
+    const result = checkGlobalInitExpr(
+      value,
+      declaration.childForFieldName('type')?.text,
+      { index, parsed },
+    );
+    if (result.kind !== 'invalid') continue;
 
     diagnostics.push({
       severity: DiagnosticSeverity.Error,
@@ -431,6 +448,7 @@ function initializerDiagnostics(
 
 type VariableInitializerContext = {
   externGlobal: boolean;
+  isConst: boolean;
   multipleDeclaration: boolean;
   requiresGlobalInitExpression: boolean;
 };
@@ -452,9 +470,9 @@ function variableInitializerContext(
 
   return {
     externGlobal,
+    isConst,
     multipleDeclaration,
-    requiresGlobalInitExpression:
-      isGlobal || isStatic || isThreadLocal || isConst,
+    requiresGlobalInitExpression: isGlobal || isStatic || isThreadLocal,
   };
 }
 
