@@ -1512,6 +1512,67 @@ test('semanticDiagnostics accepts generic module instantiation on result types a
   assert.deepEqual(semanticDiagnostics(index, result), []);
 });
 
+test('semanticDiagnostics uses expected result types to validate generic module call arguments', () => {
+  const index = new ProjectIndex();
+  const app = parseSource(
+    'file:///workspace/app.c3',
+    [
+      'module app;',
+      'import std::collections::result;',
+      'struct Parse_Error {',
+      '    int line;',
+      '    String message;',
+      '}',
+      'fn Result{int, Parse_Error} ok_return(String s) {',
+      '    return result::err({.line = 1, .message = "bad"});',
+      '}',
+      'fn Result{int, Parse_Error} ok_initializer(String s) {',
+      '    Result{int, Parse_Error} x = result::err({.line = 1, .message = "bad"});',
+      '    return x;',
+      '}',
+      'fn Result{int, Parse_Error} ok_value(String s) {',
+      '    int v = 123;',
+      '    return result::ok(v);',
+      '}',
+      'fn Result{int, Parse_Error} bad_initializer(String s) {',
+      '    Result{int, Parse_Error} x = result::err(1);',
+      '    return x;',
+      '}',
+      'fn Result{int, Parse_Error} bad_return(String s) {',
+      '    return result::err(1);',
+      '}',
+      'fn Result{int, Parse_Error} bad_ok(String s) {',
+      '    return result::ok({.line = 1, .message = "bad"});',
+      '}',
+      '',
+    ].join('\n'),
+  );
+  const result = parseSource(
+    'file:///stdlib/std/collections/result.c3',
+    [
+      'module std::collections::result <OkType, ErrType>;',
+      'struct Result {}',
+      'fn Result ok(OkType val) { return {}; }',
+      'fn Result err(ErrType err) { return {}; }',
+      '',
+    ].join('\n'),
+    { sourceKind: 'stdlib' },
+  );
+
+  index.upsert(app, false);
+  index.upsert(result, false);
+  index.rebuild();
+
+  assert.deepEqual(
+    semanticDiagnostics(index, app).map((diagnostic) => diagnostic.message),
+    [
+      "Cannot pass 'int' to parameter 'err' of 'err' with type 'Parse_Error'",
+      "Cannot pass 'int' to parameter 'err' of 'err' with type 'Parse_Error'",
+      "Cannot pass 'Parse_Error' to parameter 'val' of 'ok' with type 'int'",
+    ],
+  );
+});
+
 test('semanticDiagnostics reports function calls in global initializers', () => {
   const index = new ProjectIndex();
   const uri = 'file:///workspace/app.c3';

@@ -1,4 +1,4 @@
-import { Range } from 'vscode-languageserver/node.js';
+import { Range, SymbolKind } from 'vscode-languageserver/node.js';
 import type { SyntaxNode } from 'tree-sitter';
 
 import type { ProjectIndex } from '../project/project-index.js';
@@ -12,7 +12,7 @@ import {
   terminalTypeName,
   typeNamesCompatible,
 } from '../shared/type-ref.js';
-import type { ParsedDocument } from '../shared/types.js';
+import type { C3Symbol, ParsedDocument } from '../shared/types.js';
 
 export function expressionTypeName(
   index: ProjectIndex,
@@ -99,6 +99,14 @@ export function expressionTypeName(
     return value ? expressionTypeName(index, parsed, value) : undefined;
   }
 
+  if (expression.type === 'typed_initializer_list') {
+    return expression.childForFieldName('type')?.text;
+  }
+
+  if (expression.type === 'initializer_list') {
+    return inferInitializerListTypeName(index, parsed, expression);
+  }
+
   const typeName = index.typeNameForExpression(
     parsed.uri,
     expression.text,
@@ -126,6 +134,51 @@ export function callArgumentValueNode(arg: SyntaxNode): SyntaxNode | undefined {
       child.startIndex !== name.startIndex || child.endIndex !== name.endIndex
     );
   });
+}
+
+function inferInitializerListTypeName(
+  index: ProjectIndex,
+  parsed: ParsedDocument,
+  initializerList: SyntaxNode,
+): string | undefined {
+  const fieldNames = initializerListFieldNames(initializerList);
+  if (fieldNames.length === 0) return undefined;
+
+  const candidates = index
+    .visibleSymbols(parsed)
+    .filter(isAggregateTypeSymbol)
+    .filter((symbol) =>
+      fieldNames.every((fieldName) =>
+        symbol.children.some((child) => child.name === fieldName),
+      ),
+    );
+
+  if (candidates.length !== 1) return undefined;
+  return candidates[0]?.name;
+}
+
+function initializerListFieldNames(initializerList: SyntaxNode): string[] {
+  const names: string[] = [];
+
+  for (const element of initializerList.namedChildren) {
+    if (element.type !== 'initializer_element') continue;
+
+    const path =
+      element.childForFieldName('left') ??
+      directChildOfType(element, 'param_path');
+    const field = path ? lastDescendantOfTypes(path, ['ident']) : undefined;
+    if (field) names.push(field.text);
+  }
+
+  return [...new Set(names)];
+}
+
+function isAggregateTypeSymbol(symbol: C3Symbol): boolean {
+  return (
+    symbol.kind === SymbolKind.Struct ||
+    symbol.kind === SymbolKind.Enum ||
+    symbol.kind === SymbolKind.Interface
+  );
 }
 
 export function literalTypeName(node: SyntaxNode): string | undefined {
@@ -306,6 +359,33 @@ function orelseExpressionTypeName(
   }
 
   return nonOptionalTypeName(conditionType);
+}
+
+function directChildOfType(
+  node: SyntaxNode,
+  type: string,
+): SyntaxNode | undefined {
+  return node.namedChildren.find((child) => child.type === type);
+}
+
+function lastDescendantOfTypes(
+  node: SyntaxNode,
+  types: string[],
+): SyntaxNode | undefined {
+  let found: SyntaxNode | undefined;
+
+  function visit(current: SyntaxNode): void {
+    if (types.includes(current.type)) {
+      found = current;
+    }
+
+    for (const child of current.namedChildren) {
+      visit(child);
+    }
+  }
+
+  visit(node);
+  return found;
 }
 
 const integerTypeNames = new Set([
