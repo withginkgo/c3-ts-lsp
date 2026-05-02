@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { serverInitializeResult } from '../src/server/capabilities.js';
+import {
+  completionTriggerCharacters,
+  serverInitializeResult,
+} from '../src/server/capabilities.js';
 
 test('serverInitializeResult declares stable LSP capabilities', () => {
   const result = serverInitializeResult({ formatting: true });
@@ -12,9 +15,20 @@ test('serverInitializeResult declares stable LSP capabilities', () => {
     triggerCharacters: ['(', ','],
   });
   assert.deepEqual(capabilities.completionProvider, {
-    triggerCharacters: [':', '.', '@', '$'],
+    triggerCharacters: ['.', ':', '@', '$'],
   });
   assert.equal(capabilities.semanticTokensProvider?.full, true);
+});
+
+test('serverInitializeResult advertises dot-triggered completions', () => {
+  const result = serverInitializeResult({ formatting: true });
+
+  assert.deepEqual(result.capabilities.completionProvider?.triggerCharacters, [
+    ...completionTriggerCharacters,
+  ]);
+  assert.ok(
+    result.capabilities.completionProvider?.triggerCharacters?.includes('.'),
+  );
 });
 
 test('serverInitializeResult disables formatting when no formatter is configured', () => {

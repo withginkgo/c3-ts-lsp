@@ -835,6 +835,41 @@ test('completionItems returns struct initializer fields after designator dot', (
   );
 });
 
+test('completionItems returns struct initializer fields immediately after dot trigger', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'struct Poll {',
+    '    Socket socket;',
+    '    int events;',
+    '}',
+    'fn void socket_factory() {}',
+    'fn void use(Poll[] polls, usz poll_count) {',
+    '    polls[poll_count] = (Poll){',
+    '        .',
+    '    };',
+    '}',
+    '',
+  ].join('\n');
+  const parsed = parseSource(uri, source);
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+
+  index.upsert(parsed);
+
+  const items = completionItems(
+    index,
+    doc,
+    parsed,
+    doc.positionAt(source.indexOf('        .') + '        .'.length),
+  );
+  const labels = items.map((item) => item.label);
+
+  assert.equal(labels.includes('socket'), true);
+  assert.equal(labels.includes('events'), true);
+  assert.equal(labels.includes('socket_factory'), false);
+});
+
 test('completionItems infers struct initializer fields from assignment target', () => {
   const index = new ProjectIndex();
   const uri = 'file:///workspace/app.c3';

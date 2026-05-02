@@ -9,6 +9,8 @@ export type ServerCapabilityOptions = {
   formatting: boolean;
 };
 
+export const completionTriggerCharacters = ['.', ':', '@', '$'] as const;
+
 export function serverInitializeResult(
   options: ServerCapabilityOptions,
 ): InitializeResult {
@@ -34,7 +36,7 @@ export function serverInitializeResult(
       inlayHintProvider: true,
       documentFormattingProvider: options.formatting,
       completionProvider: {
-        triggerCharacters: [':', '.', '@', '$'],
+        triggerCharacters: [...completionTriggerCharacters],
       },
     },
   };

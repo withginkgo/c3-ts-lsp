@@ -183,6 +183,12 @@ const clientOptions = {
 };
 ```
 
+Completion trigger characters are advertised by the language server during LSP
+initialization. A VSCode extension using `vscode-languageclient` should let that
+server capability drive completion registration. If the extension registers a
+manual completion provider, include the same trigger characters: `.`, `:`, `@`,
+and `$`.
+
 Then, rebuild the extension and install from local .vsix file.Enable extension after configure **c3c path**, **c3lsp path**, **c3 std lib path**.
 
 This lsp may start from a bash file like:
