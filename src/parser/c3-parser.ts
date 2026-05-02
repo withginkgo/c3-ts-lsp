@@ -487,6 +487,7 @@ function functionSymbol(
     children: parameterSymbols(doc, node, moduleName, undefined, receiverType),
     parameters: parameterSignatures(node),
     parameterDetails: parameterDetails(node, receiverType),
+    genericParameterCount: genericParameterNames(node).length,
     returnType: header?.childForFieldName('return_type')?.text,
     receiverType,
     signature: callableSignature(node, 'func_header', 'func_param_list'),
@@ -514,6 +515,7 @@ function macroSymbol(
     children: parameterSymbols(doc, node, moduleName, undefined, receiverType),
     parameters: parameterSignatures(node),
     parameterDetails: parameterDetails(node, receiverType),
+    genericParameterCount: genericParameterNames(node).length,
     macroBodyName: macroBody?.name,
     macroBodyParameters: macroBody?.parameters,
     returnType: header?.childForFieldName('return_type')?.text,
@@ -1363,6 +1365,7 @@ function recoverCallableSymbol(
     receiverType,
     implementedInterfaces: [],
     parameters: parameterTexts,
+    genericParameterCount: genericParameterCountFromText(header),
     parameterDetails: parameterTexts.map((parameter, index) =>
       parameterDetailFromLabel(parameter, index, receiverType),
     ),
@@ -1506,6 +1509,7 @@ function createSymbol(
     implementedInterfaces?: string[];
     parameters?: string[];
     parameterDetails?: C3Parameter[];
+    genericParameterCount?: number;
     macroBodyName?: string;
     macroBodyParameters?: C3Parameter[];
     contracts?: C3Contract[];
@@ -1529,6 +1533,7 @@ function createSymbol(
     implementedInterfaces: options.implementedInterfaces,
     parameters: options.parameters ?? [],
     parameterDetails: options.parameterDetails,
+    genericParameterCount: options.genericParameterCount,
     macroBodyName: options.macroBodyName,
     macroBodyParameters: options.macroBodyParameters,
     contracts: options.contracts ?? contractsFor(node),
@@ -2030,6 +2035,9 @@ function looksLikeMissingStatementTerminator(node: SyntaxNode): boolean {
 type OpenDelimiter = {
   char: string;
   index: number;
+  indent: number;
+  line: number;
+  kind: 'control-block' | 'delimiter';
 };
 
 function collectDelimiterDiagnostics(doc: TextDocument): Diagnostic[] {
@@ -2037,15 +2045,50 @@ function collectDelimiterDiagnostics(doc: TextDocument): Diagnostic[] {
   const diagnostics: Diagnostic[] = [];
   const stack: OpenDelimiter[] = [];
   const state: LexState = {};
+  let lineStart = 0;
+  let checkedLine = false;
 
   for (let index = 0; index < source.length; index++) {
     const char = source[index];
+    const newline = char === '\n';
 
-    if (updateLexState(source, index, state)) continue;
+    if (updateLexState(source, index, state)) {
+      if (newline) {
+        lineStart = index + 1;
+        checkedLine = false;
+      }
+      continue;
+    }
+    if (newline) {
+      lineStart = index + 1;
+      checkedLine = false;
+      continue;
+    }
     if (state.lineComment || state.blockComment || state.stringQuote) continue;
 
+    if (!checkedLine && !isHorizontalWhitespace(char)) {
+      checkedLine = true;
+      closeDedentedControlBlocksBeforeLine(
+        doc,
+        source,
+        stack,
+        diagnostics,
+        lineStart,
+        index,
+      );
+    }
+
     if (isOpeningDelimiter(char)) {
-      stack.push({ char, index });
+      stack.push({
+        char,
+        index,
+        indent: indentationAt(source, index),
+        line: doc.positionAt(index).line,
+        kind:
+          char === '{' && isControlBlockOpen(source, index)
+            ? 'control-block'
+            : 'delimiter',
+      });
       continue;
     }
 
@@ -2095,6 +2138,83 @@ function collectDelimiterDiagnostics(doc: TextDocument): Diagnostic[] {
   return diagnostics;
 }
 
+function closeDedentedControlBlocksBeforeLine(
+  doc: TextDocument,
+  source: string,
+  stack: OpenDelimiter[],
+  diagnostics: Diagnostic[],
+  lineStart: number,
+  firstCodeIndex: number,
+): void {
+  const line = source.slice(lineStart, lineEndIndex(source, lineStart));
+  if (/^\s*}/.test(line)) return;
+
+  const indentation = firstCodeIndex - lineStart;
+  const lineNumber = doc.positionAt(firstCodeIndex).line;
+
+  while (stack.length > 0) {
+    const open = stack[stack.length - 1]!;
+    if (open.char !== '{' || open.kind !== 'control-block') return;
+    if (open.line >= lineNumber || indentation > open.indent) return;
+
+    stack.pop();
+    diagnostics.push(
+      syntaxDiagnostic(
+        rangeFromOffsets(doc, firstCodeIndex, firstCodeIndex + 1),
+        "Missing '}' before this statement",
+        'c3-lsp',
+      ),
+    );
+  }
+}
+
+function isHorizontalWhitespace(char: string): boolean {
+  return char === ' ' || char === '\t' || char === '\r';
+}
+
+function indentationAt(source: string, offset: number): number {
+  const lineStart = lineStartIndex(source, offset);
+  const lineEnd = lineEndIndex(source, offset);
+
+  for (let index = lineStart; index < lineEnd; index++) {
+    if (!isHorizontalWhitespace(source[index]!)) return index - lineStart;
+  }
+
+  return 0;
+}
+
+function lineStartIndex(source: string, offset: number): number {
+  const newline = source.lastIndexOf('\n', Math.max(0, offset - 1));
+  return newline < 0 ? 0 : newline + 1;
+}
+
+function lineEndIndex(source: string, offset: number): number {
+  const newline = source.indexOf('\n', offset);
+  return newline < 0 ? source.length : newline;
+}
+
+function isControlBlockOpen(source: string, braceOffset: number): boolean {
+  const header = blockHeaderBeforeBrace(source, braceOffset);
+
+  return /\b(?:if|else|while|for|foreach|catch|defer)\b/.test(header);
+}
+
+function blockHeaderBeforeBrace(source: string, braceOffset: number): string {
+  const lineStart = lineStartIndex(source, braceOffset);
+  const sameLine = source.slice(lineStart, braceOffset).trim();
+  if (sameLine) return sameLine;
+
+  let lineEnd = lineStart - 1;
+  while (lineEnd > 0) {
+    const previousLineStart = lineStartIndex(source, lineEnd);
+    const line = source.slice(previousLineStart, lineEnd).trim();
+    if (line) return line;
+    lineEnd = previousLineStart - 1;
+  }
+
+  return '';
+}
+
 function collectMissingTerminatorDiagnostics(doc: TextDocument): Diagnostic[] {
   const source = doc.getText();
   const diagnostics: Diagnostic[] = [];
@@ -2131,48 +2251,145 @@ function collectInvalidInitializerSyntaxDiagnostics(
 ): Diagnostic[] {
   const source = doc.getText();
   const diagnostics: Diagnostic[] = [];
-  const state: LexState = {};
+  const reported = new Set<string>();
 
-  for (let index = 0; index < source.length; index++) {
-    const char = source[index];
+  function add(typeName: SyntaxNode): void {
+    const key = `${typeName.startIndex}:${typeName.endIndex}`;
+    if (reported.has(key)) return;
 
-    if (updateLexState(source, index, state)) continue;
-    if (state.lineComment || state.blockComment || state.stringQuote) continue;
-    if (char !== '{') continue;
-    if (isGenericArgumentListOpen(root, index)) continue;
-
-    const typeToken = pathTokenBefore(source, index);
-    if (!typeToken) continue;
-    if (looksLikeDeclarationBraceContext(source, typeToken.start)) continue;
-    if (!looksLikeExpressionInitializerContext(source, typeToken.start)) {
-      continue;
-    }
-
+    reported.add(key);
     diagnostics.push(
       syntaxDiagnostic(
-        rangeFromOffsets(doc, typeToken.start, typeToken.end),
-        invalidInitializerSyntaxMessage(typeToken.text),
+        rangeFromNode(typeName),
+        invalidInitializerSyntaxMessage(typeName.text),
         'c3-lsp',
       ),
     );
   }
 
+  function visit(node: SyntaxNode): void {
+    if (node.type === 'generic_type_ident') {
+      const typeName = directChildOfType(node, 'path_type_ident');
+      const args = directChildOfType(node, 'generic_arg_list');
+
+      if (
+        typeName &&
+        args &&
+        isExpressionTypeContext(node) &&
+        genericArgumentsLookLikeInitializer(args)
+      ) {
+        add(typeName);
+      }
+    }
+
+    if (node.isError) {
+      for (const typeName of descendantsOfType(node, 'path_type_ident')) {
+        if (looksLikeBareInitializerInErrorNode(source, node, typeName)) {
+          add(typeName);
+        }
+      }
+    }
+
+    for (const child of node.namedChildren) {
+      visit(child);
+    }
+  }
+
+  visit(root);
   return diagnostics;
 }
 
-function isGenericArgumentListOpen(
-  root: SyntaxNode,
+function genericArgumentsLookLikeInitializer(args: SyntaxNode): boolean {
+  const inner = args.text.slice(1, -1).trim();
+  return inner === '' || /(?:^|,)\s*\.[A-Za-z_$@]/.test(inner);
+}
+
+function looksLikeBareInitializerInErrorNode(
+  source: string,
+  errorNode: SyntaxNode,
+  typeName: SyntaxNode,
+): boolean {
+  if (nearestAncestorOfTypes(typeName, ['generic_type_ident', 'type'])) {
+    return false;
+  }
+
+  const braceOffset = nextNonWhitespaceIndex(source, typeName.endIndex);
+  if (source[braceOffset] !== '{') return false;
+  if (!braceContentLooksLikeInitializer(source, braceOffset)) return false;
+
+  const boundary = Math.max(
+    errorNode.startIndex,
+    previousStatementBoundary(source, typeName.startIndex),
+  );
+  const prefix = source.slice(boundary, typeName.startIndex).trimEnd();
+  if (!prefix) return false;
+
+  if (/^(?:struct|union|enum|bitstruct|interface|constdef)\b/.test(prefix)) {
+    return false;
+  }
+
+  const previousChar = prefix.at(-1);
+  if (previousChar && '=([{,:!?+-*/%&|^~<>'.includes(previousChar)) {
+    return true;
+  }
+
+  const previousWord = prefix.match(/[A-Za-z_$@][A-Za-z0-9_$@]*$/)?.[0];
+  return previousWord === 'return' || previousWord === 'case';
+}
+
+function braceContentLooksLikeInitializer(
+  source: string,
   braceOffset: number,
 ): boolean {
-  for (
-    let node: SyntaxNode | null = root.descendantForIndex(braceOffset);
-    node;
-    node = node.parent
+  const next = nextNonWhitespaceIndex(source, braceOffset + 1);
+  return source[next] === '.' || source[next] === '}';
+}
+
+function nextNonWhitespaceIndex(source: string, offset: number): number {
+  for (let index = offset; index < source.length; index++) {
+    if (!/\s/.test(source[index]!)) return index;
+  }
+
+  return source.length;
+}
+
+function isExpressionTypeContext(node: SyntaxNode): boolean {
+  const typeNode = nearestAncestorOfTypes(node, ['type']);
+  return !!typeNode && !isTypeReferenceTypeNode(typeNode);
+}
+
+function isTypeReferenceTypeNode(typeNode: SyntaxNode): boolean {
+  const parent = typeNode.parent;
+  if (!parent) return false;
+
+  if (sameSyntaxNode(parent.childForFieldName('type'), typeNode)) return true;
+  if (sameSyntaxNode(parent.childForFieldName('return_type'), typeNode)) {
+    return true;
+  }
+
+  if (parent.type === 'typed_initializer_list') return true;
+  if (
+    parent.type === 'cast_expr' &&
+    sameSyntaxNode(parent.childForFieldName('type'), typeNode)
   ) {
-    if (node.type === 'generic_arg_list') return true;
+    return true;
+  }
+
+  if (parent.type === 'generic_arg_list') {
+    const owner = parent.parent;
+    if (owner?.type === 'trailing_generic_expr') return true;
+
+    return owner?.type === 'generic_type_ident'
+      ? isGenericTypeIdentInTypeReferenceContext(owner)
+      : false;
   }
 
   return false;
+}
+
+function isGenericTypeIdentInTypeReferenceContext(node: SyntaxNode): boolean {
+  const typeNode = node.parent?.type === 'type' ? node.parent : undefined;
+  return !!typeNode && isTypeReferenceTypeNode(typeNode);
 }
 
 function needsSemicolonTerminator(line: string): boolean {
@@ -2181,87 +2398,6 @@ function needsSemicolonTerminator(line: string): boolean {
   if (/[;{,}]$/.test(trimmed)) return false;
 
   return /^\s*(?:module|import|alias|typedef|attrdef)\b/.test(line);
-}
-
-type SourceToken = {
-  text: string;
-  start: number;
-  end: number;
-};
-
-function pathTokenBefore(source: string, offset: number): SourceToken | null {
-  const match = source
-    .slice(0, offset)
-    .match(/([A-Za-z_$@][A-Za-z0-9_$@]*(?:::[A-Za-z_$@][A-Za-z0-9_$@]*)*)\s*$/);
-  if (!match?.[1] || match.index == null) return null;
-
-  const text = match[1];
-  const start = match.index + match[0].indexOf(text);
-
-  return {
-    text,
-    start,
-    end: start + text.length,
-  };
-}
-
-function looksLikeDeclarationBraceContext(
-  source: string,
-  tokenStart: number,
-): boolean {
-  const prefix = source
-    .slice(previousStatementBoundary(source, tokenStart), tokenStart)
-    .trim();
-
-  return /^(?:struct|union|enum|bitstruct|interface|constdef)\b/.test(prefix);
-}
-
-function looksLikeExpressionInitializerContext(
-  source: string,
-  tokenStart: number,
-): boolean {
-  const before = source.slice(0, tokenStart).trimEnd();
-  if (!before) return false;
-
-  const previousChar = before.at(-1);
-  if (
-    previousChar === '{' &&
-    looksLikeAggregateBodyOpen(source, before.length - 1)
-  ) {
-    return false;
-  }
-
-  if (previousChar && '=([{,:!?+-*/%&|^~<>'.includes(previousChar)) {
-    return true;
-  }
-
-  const previousWord = before.match(/[A-Za-z_$@][A-Za-z0-9_$@]*$/)?.[0];
-  return previousWord === 'return' || previousWord === 'case';
-}
-
-function looksLikeAggregateBodyOpen(
-  source: string,
-  braceOffset: number,
-): boolean {
-  const prefix = source
-    .slice(previousDeclarationHeaderBoundary(source, braceOffset), braceOffset)
-    .trim();
-
-  return /^(?:struct|union|enum|bitstruct|interface|constdef)\b/.test(prefix);
-}
-
-function previousDeclarationHeaderBoundary(
-  source: string,
-  offset: number,
-): number {
-  for (let index = offset - 1; index >= 0; index--) {
-    const char = source[index];
-    if (char === ';' || char === '{' || char === '}') {
-      return index + 1;
-    }
-  }
-
-  return 0;
 }
 
 function previousStatementBoundary(source: string, offset: number): number {
@@ -2316,12 +2452,36 @@ function shouldSuppressErrorNodeDiagnostic(
   node: SyntaxNode,
   sourceDiagnostics: Diagnostic[],
 ): boolean {
+  if (isInvalidInitializerRecoveryArtifact(node)) return true;
+
+  if (node.isMissing && isClosingDelimiter(node.type)) {
+    return sourceDiagnostics.some(
+      (diagnostic) =>
+        diagnostic.source === 'c3-lsp' &&
+        diagnostic.message.startsWith(
+          `Missing ${printableSyntaxNodeType(node.type)}`,
+        ),
+    );
+  }
+
   if (!node.isError) return false;
 
   const range = rangeFromNode(node);
 
   return sourceDiagnostics.some((diagnostic) =>
     rangeContainsPosition(range, diagnostic.range.start),
+  );
+}
+
+function isInvalidInitializerRecoveryArtifact(node: SyntaxNode): boolean {
+  const genericArgs = nearestAncestorOfTypes(node, ['generic_arg_list']);
+  if (!genericArgs) return false;
+
+  const owner = genericArgs.parent;
+  return (
+    owner?.type === 'generic_type_ident' &&
+    isExpressionTypeContext(owner) &&
+    genericArgumentsLookLikeInitializer(genericArgs)
   );
 }
 

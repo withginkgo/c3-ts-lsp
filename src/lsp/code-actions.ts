@@ -30,7 +30,7 @@ function missingImportActions(
   diagnostic: Diagnostic,
 ): CodeAction[] {
   const match = diagnostic.message.match(
-    /^(?:Unresolved symbol|Undefined variable) '([^']+)'$/,
+    /^(?:Unresolved symbol|Unresolved function|Undefined variable) '([^']+)'$/,
   );
   if (!match) return [];
 

@@ -255,7 +255,7 @@ function callableForContext(
       : null;
   }
 
-  const result = index.resolveSymbol(
+  const result = index.resolveCallableSymbol(
     current.uri,
     context.callee,
     context.calleePosition,

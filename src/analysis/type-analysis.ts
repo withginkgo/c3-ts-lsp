@@ -257,7 +257,8 @@ function callExpressionTypeName(
 
   const target = callTargetFor(functionNode);
   const resolved = target
-    ? index.resolveSymbol(parsed.uri, target.ref, target.position).selected
+    ? index.resolveCallableSymbol(parsed.uri, target.ref, target.position)
+        .selected
     : undefined;
   const returnType =
     resolved?.returnType ??

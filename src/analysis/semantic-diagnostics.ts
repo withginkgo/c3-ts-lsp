@@ -51,7 +51,10 @@ export function typeReferenceDiagnostics(
       continue;
     }
 
-    if (result.reason === 'not_found') {
+    if (
+      result.reason === 'not_found' &&
+      !resolvesAsGenericValueArgument(index, parsed, ref, typeName)
+    ) {
       diagnostics.push({
         severity: DiagnosticSeverity.Error,
         range: typeReferenceRange(ref),
@@ -102,6 +105,23 @@ function genericTypeMissingParameters(
 
 function isParameterizedTypeReference(ref: SyntaxNode): boolean {
   return ref.parent?.type === 'generic_type_ident';
+}
+
+function resolvesAsGenericValueArgument(
+  index: ProjectIndex,
+  parsed: ParsedDocument,
+  ref: SyntaxNode,
+  typeName: string,
+): boolean {
+  if (!isGenericArgumentTypeReference(ref)) return false;
+
+  return !!index.resolveSymbol(parsed.uri, typeName, rangeFromNode(ref).start)
+    .selected;
+}
+
+function isGenericArgumentTypeReference(ref: SyntaxNode): boolean {
+  const typeNode = ancestorOfType(ref, 'type');
+  return typeNode?.parent?.type === 'generic_arg_list';
 }
 
 function isSameGenericModuleReference(
@@ -570,7 +590,7 @@ function typeReferenceNodes(root: SyntaxNode): SyntaxNode[] {
   function visit(node: SyntaxNode): void {
     if (node.type === 'doc_comment') return;
 
-    if (node.type === 'path_type_ident') {
+    if (node.type === 'path_type_ident' && isTypeReferenceContext(node)) {
       refs.push(node);
       return;
     }
@@ -582,6 +602,45 @@ function typeReferenceNodes(root: SyntaxNode): SyntaxNode[] {
 
   visit(root);
   return refs;
+}
+
+function isTypeReferenceContext(ref: SyntaxNode): boolean {
+  const typeNode = ancestorOfType(ref, 'type');
+  return !!typeNode && isTypeReferenceTypeNode(typeNode);
+}
+
+function isTypeReferenceTypeNode(typeNode: SyntaxNode): boolean {
+  const parent = typeNode.parent;
+  if (!parent) return false;
+
+  if (sameSyntaxNode(parent.childForFieldName('type'), typeNode)) return true;
+  if (sameSyntaxNode(parent.childForFieldName('return_type'), typeNode)) {
+    return true;
+  }
+
+  if (parent.type === 'typed_initializer_list') return true;
+  if (
+    parent.type === 'cast_expr' &&
+    sameSyntaxNode(parent.childForFieldName('type'), typeNode)
+  ) {
+    return true;
+  }
+
+  if (parent.type === 'generic_arg_list') {
+    const owner = parent.parent;
+    if (owner?.type === 'trailing_generic_expr') return true;
+
+    return owner?.type === 'generic_type_ident'
+      ? isGenericTypeIdentInTypeReferenceContext(owner)
+      : false;
+  }
+
+  return false;
+}
+
+function isGenericTypeIdentInTypeReferenceContext(node: SyntaxNode): boolean {
+  const typeNode = node.parent?.type === 'type' ? node.parent : undefined;
+  return !!typeNode && isTypeReferenceTypeNode(typeNode);
 }
 
 function typeReferenceRange(node: SyntaxNode): Range {
@@ -701,7 +760,7 @@ function directDiscardedCallable(
   const target = callTargetFor(functionNode);
   if (!target) return undefined;
 
-  const symbol = index.resolveSymbol(
+  const symbol = index.resolveCallableSymbol(
     parsed.uri,
     target.ref,
     target.position,
@@ -849,6 +908,18 @@ function ancestorOfType(
   }
 
   return undefined;
+}
+
+function sameSyntaxNode(
+  left: SyntaxNode | null | undefined,
+  right: SyntaxNode | null | undefined,
+): boolean {
+  return (
+    !!left &&
+    !!right &&
+    left.startIndex === right.startIndex &&
+    left.endIndex === right.endIndex
+  );
 }
 
 function lastDescendantOfTypes(

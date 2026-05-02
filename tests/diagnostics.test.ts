@@ -97,7 +97,7 @@ test('semanticDiagnostics reports unresolved expression symbols', () => {
 
   assert.deepEqual(
     semanticDiagnostics(index, parsed).map((diagnostic) => diagnostic.message),
-    ["Unresolved symbol 'missing'"],
+    ["Unresolved function 'missing'"],
   );
 });
 
@@ -1285,6 +1285,149 @@ test('semanticDiagnostics reports generic type references without parameters', (
   );
 });
 
+test('semanticDiagnostics accepts generic type references and generic calls with brace arguments', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'struct Parse_Error {}',
+      'struct List <Type> {}',
+      'struct Result <Type, Error> {}',
+      'struct Foo <Left, Right> {}',
+      'fn Result{Type, Error} ok(Type value) <Type, Error> { return {}; }',
+      'fn void use() {',
+      '    List{int} a;',
+      '    Result{int, Parse_Error} test = ok{int, Parse_Error}(1);',
+      '    Foo{int, double} g;',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(parsed.diagnostics, []);
+  assert.deepEqual(semanticDiagnostics(index, parsed), []);
+});
+
+test('semanticDiagnostics resolves module-qualified generic function calls in call context', () => {
+  const index = new ProjectIndex();
+  const app = parseSource(
+    'file:///workspace/app.c3',
+    [
+      'module app;',
+      'import result;',
+      'struct Foo <Left, Right> {}',
+      'fn void use() {',
+      '    Result{int, Parse_Error} test = result::ok{int, Parse_Error}(1);',
+      '    Result{int, Parse_Error} test2 = ok{int, Parse_Error}(1);',
+      '    List{int} a;',
+      '    Foo{int, double} g;',
+      '    foo_test::test{int, double}(1.0, &g);',
+      '}',
+      '',
+    ].join('\n'),
+  );
+  const resultOne = parseSource(
+    'file:///workspace/result/one.c3',
+    [
+      'module result;',
+      'struct Parse_Error {}',
+      'struct List <Type> {}',
+      'struct Result <Type, Error> {}',
+      'fn Result{Type, Error} ok(Type value) <Type, Error> { return {}; }',
+      '',
+    ].join('\n'),
+  );
+  const resultTwo = parseSource(
+    'file:///workspace/result/two.c3',
+    [
+      'module result;',
+      'fn Result{Type, Error} ok(Type value, Error err) <Type, Error> { return {}; }',
+      '',
+    ].join('\n'),
+  );
+  const fooTest = parseSource(
+    'file:///workspace/foo_test.c3',
+    [
+      'module foo_test;',
+      'fn void test(double value, Foo{int, double}* g) <Type, Error> {}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(app, false);
+  index.upsert(resultOne, false);
+  index.upsert(resultTwo, false);
+  index.upsert(fooTest, false);
+  index.rebuild();
+
+  assert.deepEqual(app.diagnostics, []);
+  assert.deepEqual(semanticDiagnostics(index, app), []);
+});
+
+test('semanticDiagnostics reports generic function reference and call shape errors', () => {
+  const index = new ProjectIndex();
+  const app = parseSource(
+    'file:///workspace/app.c3',
+    [
+      'module app;',
+      'import result;',
+      'fn void use() {',
+      '    result::ok;',
+      '    result::ok{int, Parse_Error};',
+      '    result::ok{int, Parse_Error}(1, 2);',
+      '    result::ok{int}(1);',
+      '}',
+      '',
+    ].join('\n'),
+  );
+  const result = parseSource(
+    'file:///workspace/result.c3',
+    [
+      'module result;',
+      'struct Parse_Error {}',
+      'struct Result <Type, Error> {}',
+      'fn Result{Type, Error} ok(Type value) <Type, Error> { return {}; }',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(app, false);
+  index.upsert(result, false);
+  index.rebuild();
+
+  assert.deepEqual(
+    semanticDiagnostics(index, app).map((diagnostic) => [
+      diagnostic.message,
+      diagnostic.range.start.line,
+      diagnostic.range.start.character,
+      diagnostic.range.end.line,
+      diagnostic.range.end.character,
+    ]),
+    [
+      ["Function 'result::ok' used as value", 3, 4, 3, 14],
+      [
+        "Generic function reference 'result::ok{int, Parse_Error}' requires call",
+        4,
+        14,
+        4,
+        32,
+      ],
+      ["'ok' expects 1 argument, got 2", 5, 32, 5, 38],
+      [
+        "Generic function 'result::ok' expects 2 generic arguments, got 1",
+        6,
+        14,
+        6,
+        19,
+      ],
+    ],
+  );
+});
+
 test('semanticDiagnostics reports generic types inherited from generic modules', () => {
   const index = new ProjectIndex();
   const app = parseSource(
@@ -1760,7 +1903,7 @@ test('semanticDiagnostics reports ambiguous expression symbols', () => {
 
   assert.deepEqual(
     semanticDiagnostics(index, app).map((diagnostic) => diagnostic.message),
-    ["Ambiguous symbol 'connect' (2 candidates)"],
+    ["Ambiguous function call 'connect' (2 candidates)"],
   );
 });
 
@@ -1788,8 +1931,8 @@ test('semanticDiagnostics reports duplicate callable names as ambiguous', () => 
     [
       "Duplicate function 'add'",
       "Duplicate function 'add'",
-      "Ambiguous symbol 'add' (2 candidates)",
-      "Ambiguous symbol 'add' (2 candidates)",
+      "Ambiguous function call 'add' (2 candidates)",
+      "Ambiguous function call 'add' (2 candidates)",
     ],
   );
 });

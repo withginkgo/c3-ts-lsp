@@ -100,7 +100,7 @@ function callablesForTarget(
   current: ParsedDocument,
   callTarget: C3CallTarget,
 ): C3Symbol[] {
-  const result = index.resolveSymbol(
+  const result = index.resolveCallableSymbol(
     current.uri,
     callTarget.ref,
     callTarget.position,
@@ -144,6 +144,7 @@ function callablesForTextContext(
         start: context.calleePosition,
         end: context.calleePosition,
       },
+      genericArgs: [],
     }),
   };
 }

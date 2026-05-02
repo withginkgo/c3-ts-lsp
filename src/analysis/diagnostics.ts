@@ -10,9 +10,11 @@ import type { ProjectIndex } from '../project/project-index.js';
 import { callableParameters, isCallableSymbol } from '../shared/callable.js';
 import {
   callArguments,
+  callArgumentsRange,
   callExpressionNodes,
   callTargetFor,
   type C3CallArgument,
+  type C3CallTarget,
 } from '../shared/calls.js';
 import { terminalTypeName, typeNamesCompatible } from '../shared/type-ref.js';
 import type { C3Parameter, C3Symbol, ParsedDocument } from '../shared/types.js';
@@ -171,7 +173,9 @@ function referenceDiagnostics(
   index: ProjectIndex,
   parsed: ParsedDocument,
 ): Diagnostic[] {
-  const diagnostics: Diagnostic[] = [];
+  const diagnostics: Diagnostic[] = [
+    ...genericFunctionReferenceDiagnostics(index, parsed),
+  ];
 
   for (const ref of referenceNodes(parsed.tree.rootNode)) {
     pushReferenceDiagnostic(index, parsed, ref, diagnostics);
@@ -179,6 +183,47 @@ function referenceDiagnostics(
 
   for (const ref of memberReferenceNodes(parsed.tree.rootNode)) {
     pushReferenceDiagnostic(index, parsed, ref, diagnostics);
+  }
+
+  return diagnostics.sort((a, b) => compareRanges(a.range, b.range));
+}
+
+function genericFunctionReferenceDiagnostics(
+  index: ProjectIndex,
+  parsed: ParsedDocument,
+): Diagnostic[] {
+  const diagnostics: Diagnostic[] = [];
+
+  for (const expression of trailingGenericExpressionNodes(
+    parsed.tree.rootNode,
+  )) {
+    if (isCallFunctionNode(expression)) continue;
+
+    const target = callTargetFor(expression);
+    if (!target) continue;
+
+    const result = index.resolveCallableSymbol(
+      parsed.uri,
+      target.ref,
+      target.position,
+    );
+
+    if (result.reason === 'not_found') {
+      diagnostics.push({
+        severity: DiagnosticSeverity.Error,
+        range: target.range,
+        message: `Unresolved function '${target.ref}'`,
+        source: diagnosticSource,
+      });
+      continue;
+    }
+
+    diagnostics.push({
+      severity: DiagnosticSeverity.Error,
+      range: target.genericRange ?? rangeFromNode(expression),
+      message: `Generic function reference '${expression.text}' requires call`,
+      source: diagnosticSource,
+    });
   }
 
   return diagnostics;
@@ -250,24 +295,196 @@ function callDiagnostics(
     const target = callTargetFor(functionNode);
     if (!target) continue;
 
-    const result = index.resolveSymbol(parsed.uri, target.ref, target.position);
-    const symbol = result.selected;
-    if (!symbol || !isCallableSymbol(symbol)) continue;
-
-    diagnostics.push(
-      ...validateCallArguments(
-        symbol,
-        index,
-        parsed,
-        callableParameters(symbol, { methodStyle: target.methodStyle }),
-        callArguments(call),
-        rangeFromNode(call),
-      ),
-      ...validateMacroBodyArguments(symbol, call),
-    );
+    diagnostics.push(...resolveCallDiagnostics(index, parsed, call, target));
   }
 
   return diagnostics;
+}
+
+function resolveCallDiagnostics(
+  index: ProjectIndex,
+  parsed: ParsedDocument,
+  call: SyntaxNode,
+  target: C3CallTarget,
+): Diagnostic[] {
+  const result = index.resolveCallableSymbol(
+    parsed.uri,
+    target.ref,
+    target.position,
+  );
+
+  if (isMacroBodyParameterCall(parsed, call, target)) {
+    return [];
+  }
+
+  if (result.reason === 'not_found') {
+    return [
+      {
+        severity: DiagnosticSeverity.Error,
+        range: target.range,
+        message: `Unresolved function '${target.ref}'`,
+        source: diagnosticSource,
+      },
+    ];
+  }
+
+  const genericMatches = callableGenericArgumentMatches(
+    result.candidates,
+    target,
+  );
+
+  if (genericMatches.length === 0) {
+    return [
+      genericArgumentCountDiagnostic(
+        target,
+        result.candidates,
+        target.genericRange ?? target.range,
+      ),
+    ];
+  }
+
+  const args = callArguments(call);
+  const argumentRange = callArgumentsRange(call) ?? rangeFromNode(call);
+  const shapeMatches = genericMatches.filter((symbol) =>
+    callArgumentShapeMatches(
+      callableParameters(symbol, { methodStyle: target.methodStyle }),
+      args,
+    ),
+  );
+
+  if (shapeMatches.length === 0 && genericMatches.length > 1) {
+    return [
+      {
+        severity: DiagnosticSeverity.Error,
+        range: argumentRange,
+        message: `No matching function overload for '${target.ref}'`,
+        source: diagnosticSource,
+      },
+    ];
+  }
+
+  const selected = shapeMatches[0] ?? genericMatches[0];
+  if (!selected) return [];
+
+  if (shapeMatches.length > 1) {
+    return [
+      {
+        severity: DiagnosticSeverity.Error,
+        range: target.range,
+        message: `Ambiguous function call '${target.ref}' (${shapeMatches.length} candidates)`,
+        source: diagnosticSource,
+      },
+    ];
+  }
+
+  return [
+    ...validateCallArguments(
+      selected,
+      index,
+      parsed,
+      callableParameters(selected, { methodStyle: target.methodStyle }),
+      args,
+      argumentRange,
+    ),
+    ...validateMacroBodyArguments(selected, call),
+  ];
+}
+
+function callableGenericArgumentMatches(
+  candidates: C3Symbol[],
+  target: C3CallTarget,
+): C3Symbol[] {
+  if (!target.genericRange) return candidates;
+
+  return candidates.filter(
+    (symbol) =>
+      (symbol.genericParameterCount ?? 0) === target.genericArgs.length,
+  );
+}
+
+function genericArgumentCountDiagnostic(
+  target: C3CallTarget,
+  candidates: C3Symbol[],
+  range: Range,
+): Diagnostic {
+  const expectedCounts = uniqueNumbers(
+    candidates.map((symbol) => symbol.genericParameterCount ?? 0),
+  );
+  const expected =
+    expectedCounts.length === 1
+      ? String(expectedCounts[0])
+      : expectedCounts.join(' or ');
+
+  return {
+    severity: DiagnosticSeverity.Error,
+    range,
+    message: `Generic function '${target.ref}' expects ${expected} generic argument${expected === '1' ? '' : 's'}, got ${target.genericArgs.length}`,
+    source: diagnosticSource,
+  };
+}
+
+function callArgumentShapeMatches(
+  parameters: C3Parameter[],
+  args: C3CallArgument[],
+): boolean {
+  const supplied = new Set<number>();
+  const variadicIndex = parameters.findIndex((parameter) => parameter.variadic);
+  let positionalCursor = 0;
+
+  for (const arg of args) {
+    if (arg.name) {
+      const namedIndex = parameters.findIndex(
+        (parameter) => parameter.name === arg.name,
+      );
+      if (namedIndex < 0 || supplied.has(namedIndex)) return false;
+
+      supplied.add(namedIndex);
+      continue;
+    }
+
+    const positionalIndex = nextPositionalIndex(
+      parameters,
+      supplied,
+      positionalCursor,
+      variadicIndex,
+    );
+
+    if (variadicIndex >= 0 && positionalIndex >= variadicIndex) {
+      supplied.add(variadicIndex);
+      continue;
+    }
+
+    if (positionalIndex >= parameters.length) return false;
+
+    supplied.add(positionalIndex);
+    positionalCursor = positionalIndex + 1;
+  }
+
+  return parameters.every(
+    (parameter, index) =>
+      parameter.optional || parameter.variadic || supplied.has(index),
+  );
+}
+
+function isMacroBodyParameterCall(
+  parsed: ParsedDocument,
+  call: SyntaxNode,
+  target: C3CallTarget,
+): boolean {
+  if (!target.ref.startsWith('@')) return false;
+
+  const macro = ancestorOfType(call, 'macro_declaration');
+  if (!macro) return false;
+
+  const macroRange = rangeFromNode(macro);
+  const symbol = parsed.symbols.find(
+    (candidate) =>
+      candidate.kind === SymbolKind.Function &&
+      candidate.macroBodyName === target.ref &&
+      compareRanges(candidate.range, macroRange) === 0,
+  );
+
+  return !!symbol;
 }
 
 function validateMacroBodyArguments(
@@ -516,6 +733,10 @@ function argumentRangeLabel(parameters: C3Parameter[]): string {
   return `${min}-${parameters.length}`;
 }
 
+function uniqueNumbers(values: number[]): number[] {
+  return [...new Set(values)].sort((a, b) => a - b);
+}
+
 function pushReferenceDiagnostic(
   index: ProjectIndex,
   parsed: ParsedDocument,
@@ -537,11 +758,34 @@ function pushReferenceDiagnostic(
     });
   }
 
+  if (
+    result.reason === 'ambiguous' &&
+    result.candidates.every(isCallableSymbol)
+  ) {
+    diagnostics.push({
+      severity: DiagnosticSeverity.Error,
+      range: rangeFromNode(ref),
+      message: `Function '${ref.text}' used as value`,
+      source: diagnosticSource,
+    });
+    return;
+  }
+
   if (result.reason === 'ambiguous') {
     diagnostics.push({
       severity: DiagnosticSeverity.Error,
       range: rangeFromNode(ref),
       message: ambiguousReferenceMessage(ref, result.candidates.length),
+      source: diagnosticSource,
+    });
+    return;
+  }
+
+  if (result.selected && isCallableSymbol(result.selected)) {
+    diagnostics.push({
+      severity: DiagnosticSeverity.Error,
+      range: rangeFromNode(ref),
+      message: `Function '${ref.text}' used as value`,
       source: diagnosticSource,
     });
   }
@@ -568,11 +812,21 @@ function isVariableReference(ref: SyntaxNode): boolean {
 }
 
 function isCallTargetReference(ref: SyntaxNode): boolean {
+  if (isTrailingGenericArgument(ref)) return true;
+
   const parent = ref.parent;
   if (!parent || parent.type !== 'call_expr') return false;
 
   const functionNode = parent.childForFieldName('function');
   return !!functionNode && sameNode(functionNode, ref);
+}
+
+function isTrailingGenericArgument(ref: SyntaxNode): boolean {
+  const parent = ref.parent;
+  if (parent?.type !== 'trailing_generic_expr') return false;
+
+  const argument = parent.childForFieldName('argument');
+  return !!argument && sameNode(argument, ref);
 }
 
 function sameNode(a: SyntaxNode, b: SyntaxNode): boolean {
@@ -581,6 +835,61 @@ function sameNode(a: SyntaxNode, b: SyntaxNode): boolean {
     a.startIndex === b.startIndex &&
     a.endIndex === b.endIndex
   );
+}
+
+function ancestorOfType(
+  node: SyntaxNode,
+  type: string,
+): SyntaxNode | undefined {
+  let current = node.parent;
+
+  while (current) {
+    if (current.type === type) return current;
+    current = current.parent;
+  }
+
+  return undefined;
+}
+
+function isFieldCallTarget(fieldExpr: SyntaxNode): boolean {
+  const parent = fieldExpr.parent;
+  const genericOwner =
+    parent?.type === 'trailing_generic_expr' &&
+    sameNode(parent.childForFieldName('argument') ?? parent, fieldExpr)
+      ? parent
+      : undefined;
+  const callOwner = genericOwner?.parent ?? parent;
+  if (callOwner?.type !== 'call_expr') return false;
+
+  const functionNode = callOwner.childForFieldName('function');
+  return !!functionNode && sameNode(functionNode, genericOwner ?? fieldExpr);
+}
+
+function isCallFunctionNode(node: SyntaxNode): boolean {
+  const parent = node.parent;
+  if (parent?.type !== 'call_expr') return false;
+
+  const functionNode = parent.childForFieldName('function');
+  return !!functionNode && sameNode(functionNode, node);
+}
+
+function trailingGenericExpressionNodes(root: SyntaxNode): SyntaxNode[] {
+  const nodes: SyntaxNode[] = [];
+
+  function visit(node: SyntaxNode): void {
+    if (node.type === 'doc_comment') return;
+
+    if (node.type === 'trailing_generic_expr') {
+      nodes.push(node);
+    }
+
+    for (const child of node.namedChildren) {
+      visit(child);
+    }
+  }
+
+  visit(root);
+  return nodes;
 }
 
 function directChildrenOfType(node: SyntaxNode, type: string): SyntaxNode[] {
@@ -594,7 +903,7 @@ function referenceNodes(root: SyntaxNode): SyntaxNode[] {
     if (node.type === 'doc_comment') return;
 
     if (node.type === 'ident_expr') {
-      refs.push(node);
+      if (!isCallTargetReference(node)) refs.push(node);
       return;
     }
 
@@ -615,7 +924,7 @@ function memberReferenceNodes(root: SyntaxNode): SyntaxNode[] {
 
     if (node.type === 'field_expr') {
       const field = node.childForFieldName('field');
-      if (field) refs.push(field);
+      if (field && !isFieldCallTarget(node)) refs.push(field);
     }
 
     for (const child of node.namedChildren) {

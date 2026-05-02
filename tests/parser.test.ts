@@ -563,6 +563,42 @@ test('parseSource accepts generic local variable declarations', () => {
   assert.deepEqual(parsed.diagnostics, []);
 });
 
+test('parseSource keeps generic type references separate from generic calls', () => {
+  const parsed = parseSource(
+    'file:///workspace/app.c3',
+    [
+      'module app;',
+      'struct Parse_Error {}',
+      'struct List <Type> {}',
+      'struct Result <Type, Error> {}',
+      'struct Foo <Left, Right> {}',
+      'fn void use() {',
+      '    List{int} a;',
+      '    Result{int, Parse_Error} test = ok{int, Parse_Error}(1);',
+      '    result::ok{int, Parse_Error}(1);',
+      '    Foo{int, double} g;',
+      '    foo_test::test{int, double}(1.0, &g);',
+      '}',
+      '',
+    ].join('\n'),
+  );
+  const tree = parsed.tree.rootNode.toString();
+
+  assert.deepEqual(parsed.diagnostics, []);
+  assert.match(
+    tree,
+    /declaration type: \(type \(generic_type_ident \(path_type_ident \(type_ident\)\)/,
+  );
+  assert.match(
+    tree,
+    /call_expr function: \(trailing_generic_expr argument: \(ident_expr \(ident\)\)/,
+  );
+  assert.match(
+    tree,
+    /call_expr function: \(trailing_generic_expr argument: \(ident_expr \(module_resolution \(ident\)\) \(ident\)\)/,
+  );
+});
+
 test('parseSource accepts generic parameter declarations', () => {
   const parsed = parseSource(
     'file:///workspace/app.c3',
@@ -917,6 +953,34 @@ test('parseSource reports missing closing delimiters with focused syntax diagnos
       diagnostic.range.start.character,
     ]),
     [["Missing ')' before '}'", 'c3-lsp', 3, 0]],
+  );
+});
+
+test('parseSource reports missing control block closers at the likely insertion point', () => {
+  const parsed = parseSource(
+    'file:///workspace/app.c3',
+    [
+      'module app;',
+      'import std::io;',
+      'fn void main() {',
+      '    if (catch err = b.pop())',
+      '    {',
+      '        io::printn(err);',
+      '',
+      '    a.set_at(0, 999);',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  assert.deepEqual(
+    parsed.diagnostics.map((diagnostic) => [
+      diagnostic.message,
+      diagnostic.source,
+      diagnostic.range.start.line,
+      diagnostic.range.start.character,
+    ]),
+    [["Missing '}' before this statement", 'c3-lsp', 7, 4]],
   );
 });
 

@@ -6,6 +6,8 @@ export type C3CallTarget = {
   position: Position;
   methodStyle: boolean;
   range: Range;
+  genericArgs: SyntaxNode[];
+  genericRange?: Range;
 };
 
 export type C3CallArgument = {
@@ -16,8 +18,11 @@ export type C3CallArgument = {
 };
 
 export function callTargetFor(functionNode: SyntaxNode): C3CallTarget | null {
-  if (functionNode.type === 'field_expr') {
-    const field = functionNode.childForFieldName('field');
+  const generic = trailingGenericExpressionParts(functionNode);
+  const targetNode = generic?.argument ?? functionNode;
+
+  if (targetNode.type === 'field_expr') {
+    const field = targetNode.childForFieldName('field');
     if (!field) return null;
 
     return {
@@ -25,14 +30,22 @@ export function callTargetFor(functionNode: SyntaxNode): C3CallTarget | null {
       position: rangeFromNode(field).start,
       methodStyle: true,
       range: rangeFromNode(field),
+      genericArgs: genericArguments(generic?.operator),
+      genericRange: generic?.operator
+        ? rangeFromNode(generic.operator)
+        : undefined,
     };
   }
 
   return {
-    ref: functionNode.text,
-    position: rangeFromNode(functionNode).start,
+    ref: targetNode.text,
+    position: rangeFromNode(targetNode).start,
     methodStyle: false,
-    range: rangeFromNode(functionNode),
+    range: rangeFromNode(targetNode),
+    genericArgs: genericArguments(generic?.operator),
+    genericRange: generic?.operator
+      ? rangeFromNode(generic.operator)
+      : undefined,
   };
 }
 
@@ -52,6 +65,11 @@ export function callArguments(call: SyntaxNode): C3CallArgument[] {
         nameRange: name ? rangeFromNode(name) : undefined,
       };
     });
+}
+
+export function callArgumentsRange(call: SyntaxNode): Range | undefined {
+  const args = call.childForFieldName('arguments');
+  return args ? rangeFromNode(args) : undefined;
 }
 
 export function callExpressionNodes(root: SyntaxNode): SyntaxNode[] {
@@ -78,4 +96,22 @@ export function rangeFromNode(node: SyntaxNode): Range {
     node.endPosition.row,
     node.endPosition.column,
   );
+}
+
+function trailingGenericExpressionParts(
+  node: SyntaxNode,
+): { argument: SyntaxNode; operator?: SyntaxNode } | undefined {
+  if (node.type !== 'trailing_generic_expr') return undefined;
+
+  const argument = node.childForFieldName('argument');
+  if (!argument) return undefined;
+
+  return {
+    argument,
+    operator: node.childForFieldName('operator') ?? undefined,
+  };
+}
+
+function genericArguments(node: SyntaxNode | undefined): SyntaxNode[] {
+  return node?.namedChildren ?? [];
 }

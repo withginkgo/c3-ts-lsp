@@ -17,6 +17,8 @@ import {
   builtinOwnerSymbol,
   builtinTypeSymbol,
 } from '../shared/builtin-types.js';
+import { isCallableSymbol } from '../shared/callable.js';
+import { callTargetFor } from '../shared/calls.js';
 import {
   collectionElementTypeName,
   nominalTypeName,
@@ -330,6 +332,19 @@ export class ProjectIndex {
 
     const builtin = builtinTypeSymbol(ref);
     return this.resultFromCandidates(builtin ? [builtin] : []);
+  }
+
+  resolveCallableSymbol(
+    currentUri: string,
+    ref: string,
+    position: Position,
+  ): ResolveResult {
+    const current = this.parsedByUri.get(currentUri);
+    if (!current) return { candidates: [], reason: 'not_found' };
+
+    return this.resultFromCandidates(
+      this.callableSymbolCandidates(current, ref, position),
+    );
   }
 
   findSymbolAt(
@@ -681,6 +696,41 @@ export class ProjectIndex {
     return [];
   }
 
+  private callableSymbolCandidates(
+    current: ParsedDocument,
+    ref: string,
+    position: Position,
+  ): C3Symbol[] {
+    const memberCandidates = this.memberSymbolCandidatesAt(
+      current,
+      ref,
+      position,
+    );
+
+    if (memberCandidates) {
+      return memberCandidates.filter(isCallableSymbol);
+    }
+
+    if (ref.includes('::')) {
+      return this.qualifiedSymbolCandidates(current, ref).filter(
+        isCallableSymbol,
+      );
+    }
+
+    const declared = findDeclaredSymbolAt(current.symbols, ref, position);
+    if (declared && isCallableSymbol(declared)) return [declared];
+
+    const moduleCandidates = this.visibleModuleSymbolCandidates(
+      current,
+      ref,
+    ).filter(isCallableSymbol);
+    if (moduleCandidates.length > 0) return moduleCandidates;
+
+    return this.visibleUnqualifiedNestedCandidates(current, ref).filter(
+      isCallableSymbol,
+    );
+  }
+
   private memberSymbolCandidatesAt(
     current: ParsedDocument,
     ref: string,
@@ -741,11 +791,14 @@ export class ProjectIndex {
       const functionNode = expression.childForFieldName('function');
       if (!functionNode) return undefined;
 
-      return this.expressionTypeName(
-        current,
-        functionNode,
-        rangeFromNode(functionNode).start,
-      );
+      const target = callTargetFor(functionNode);
+      if (!target) return undefined;
+
+      return this.resolveCallableSymbol(
+        current.uri,
+        target.ref,
+        target.position,
+      ).selected?.returnType;
     }
 
     if (expression.type === 'elvis_orelse_expr') {
@@ -912,7 +965,7 @@ export class ProjectIndex {
 
     const call = splitCallExpression(text);
     if (call) {
-      return this.resolveSymbol(current.uri, call.functionRef, position)
+      return this.resolveCallableSymbol(current.uri, call.functionRef, position)
         .selected?.returnType;
     }
 

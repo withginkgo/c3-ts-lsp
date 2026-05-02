@@ -21,6 +21,7 @@ export type C3Symbol = {
   implementedInterfaces?: string[];
   parameters: string[];
   parameterDetails?: C3Parameter[];
+  genericParameterCount?: number;
   macroBodyName?: string;
   macroBodyParameters?: C3Parameter[];
   contracts?: C3Contract[];
