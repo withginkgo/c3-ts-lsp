@@ -84,7 +84,10 @@ function genericTypeMissingParameters(
   if (!symbol) return undefined;
 
   const typeInfo = symbol?.typeInfo;
-  if (!typeInfo?.isGeneric || typeInfo.genericParameterCount <= 0) {
+  const genericParameterCount =
+    typeInfo?.effectiveGenericParams?.length ?? typeInfo?.genericParameterCount;
+
+  if (!typeInfo?.isGeneric || !genericParameterCount) {
     return undefined;
   }
 

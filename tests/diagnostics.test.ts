@@ -1458,6 +1458,60 @@ test('semanticDiagnostics reports generic types inherited from generic modules',
   assert.deepEqual(semanticDiagnostics(index, list), []);
 });
 
+test('semanticDiagnostics accepts generic module instantiation on result types and calls', () => {
+  const index = new ProjectIndex();
+  const app = parseSource(
+    'file:///workspace/app.c3',
+    [
+      'module app;',
+      'import std::collections::result;',
+      'struct Parse_Error {}',
+      'fn void use() {',
+      '    Result res;',
+      '    Result{int, Parse_Error} test = result::ok{int, Parse_Error}(1);',
+      '    Result{int, Parse_Error} inferred = result::ok(1);',
+      '    result::Result{int, Parse_Error} qualified;',
+      '}',
+      '',
+    ].join('\n'),
+  );
+  const result = parseSource(
+    'file:///stdlib/std/collections/result.c3',
+    [
+      'module std::collections::result <OkType, ErrType>;',
+      'struct Result {}',
+      'fn Result ok(OkType val) { return {}; }',
+      'fn OkType? Result.ok(&self);',
+      '',
+    ].join('\n'),
+    { sourceKind: 'stdlib' },
+  );
+
+  index.upsert(app, false);
+  index.upsert(result, false);
+  index.rebuild();
+
+  assert.deepEqual(index.getModule('std::collections::result')?.genericParams, [
+    'OkType',
+    'ErrType',
+  ]);
+  assert.deepEqual(
+    result.symbols.find((symbol) => symbol.name === 'Result')
+      ?.effectiveGenericParams,
+    ['OkType', 'ErrType'],
+  );
+  assert.deepEqual(
+    result.symbols.find((symbol) => symbol.name === 'ok')
+      ?.effectiveGenericParams,
+    ['OkType', 'ErrType'],
+  );
+  assert.deepEqual(
+    semanticDiagnostics(index, app).map((diagnostic) => diagnostic.message),
+    ["'Result' is a generic struct, did you forget the parameters '{ ... }'?"],
+  );
+  assert.deepEqual(semanticDiagnostics(index, result), []);
+});
+
 test('semanticDiagnostics validates call arguments, initializers, assignments, and conditions', () => {
   const index = new ProjectIndex();
   const uri = 'file:///workspace/app.c3';

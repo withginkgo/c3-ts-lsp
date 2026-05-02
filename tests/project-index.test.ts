@@ -159,6 +159,70 @@ test('ProjectIndex resolves symbols from child modules of imported modules', () 
   );
 });
 
+test('ProjectIndex deduplicates imported candidates by canonical module key', () => {
+  const index = new ProjectIndex();
+  const appUri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'import std::collections;',
+    'fn void use() {',
+    '    result::ok{int, Parse_Error}(1);',
+    '}',
+    '',
+  ].join('\n');
+  const app = parseSource(appUri, source);
+
+  index.upsert(app, false);
+  index.upsert(
+    parseSource(
+      'file:///stdlib/std/collections/collections.c3',
+      ['module std::collections;', ''].join('\n'),
+      { sourceKind: 'stdlib' },
+    ),
+    false,
+  );
+  index.upsert(
+    parseSource(
+      'file:///stdlib/std/collections/result-one.c3',
+      [
+        'module std::collections::result <OkType, ErrType>;',
+        'struct Result {}',
+        'fn Result ok(OkType val) { return {}; }',
+        'fn OkType? Result.ok(&self);',
+        '',
+      ].join('\n'),
+      { sourceKind: 'stdlib' },
+    ),
+    false,
+  );
+  index.upsert(
+    parseSource(
+      'file:///stdlib/std/collections/result-two.c3',
+      [
+        'module std::collections::result <OkType, ErrType>;',
+        'struct Result {}',
+        'fn Result ok(OkType val) { return {}; }',
+        'fn OkType? Result.ok(&self);',
+        '',
+      ].join('\n'),
+      { sourceKind: 'stdlib' },
+    ),
+    false,
+  );
+  index.rebuild();
+
+  const result = index.resolveCallableSymbol(
+    appUri,
+    'result::ok',
+    TextDocument.create(appUri, 'c3', 1, source).positionAt(
+      source.indexOf('result::ok'),
+    ),
+  );
+
+  assert.equal(result.reason, 'resolved');
+  assert.equal(result.candidates.length, 1);
+});
+
 test('ProjectIndex resolves implicit std::core child module prefixes', () => {
   const index = new ProjectIndex();
   const appUri = 'file:///workspace/app.c3';

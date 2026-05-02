@@ -160,8 +160,8 @@ test('parseSource records type declaration metadata', () => {
   assert.deepEqual(typeInfoSummary(byName.get('Result')), [
     'struct',
     true,
-    1,
-    'declaration',
+    2,
+    'mixed',
     { line: 1, character: 7 },
   ]);
   assert.deepEqual(typeInfoSummary(byName.get('Payload')), [
@@ -188,8 +188,8 @@ test('parseSource records type declaration metadata', () => {
   assert.deepEqual(typeInfoSummary(byName.get('Id')), [
     'typedef',
     true,
-    1,
-    'declaration',
+    2,
+    'mixed',
     { line: 7, character: 8 },
   ]);
   assert.deepEqual(typeInfoSummary(byName.get('Name')), [
@@ -206,6 +206,36 @@ test('parseSource records type declaration metadata', () => {
     undefined,
     { line: 9, character: 9 },
   ]);
+});
+
+test('parseSource records module generic params on type and callable symbols', () => {
+  const parsed = parseSource(
+    'file:///stdlib/std/collections/result.c3',
+    [
+      'module std::collections::result <OkType, ErrType>;',
+      'struct Result {}',
+      'fn Result ok(OkType val) { return {}; }',
+      '',
+    ].join('\n'),
+    { sourceKind: 'stdlib' },
+  );
+  const byName = new Map(parsed.symbols.map((symbol) => [symbol.name, symbol]));
+  const result = byName.get('Result');
+  const ok = byName.get('ok');
+
+  assert.deepEqual(parsed.moduleGenericParams, ['OkType', 'ErrType']);
+  assert.deepEqual(result?.moduleGenericParams, ['OkType', 'ErrType']);
+  assert.deepEqual(result?.declaredGenericParams, []);
+  assert.deepEqual(result?.effectiveGenericParams, ['OkType', 'ErrType']);
+  assert.deepEqual(result?.typeInfo?.effectiveGenericParams, [
+    'OkType',
+    'ErrType',
+  ]);
+  assert.equal(result?.typeInfo?.genericParameterCount, 2);
+  assert.deepEqual(ok?.moduleGenericParams, ['OkType', 'ErrType']);
+  assert.deepEqual(ok?.declaredGenericParams, []);
+  assert.deepEqual(ok?.effectiveGenericParams, ['OkType', 'ErrType']);
+  assert.equal(ok?.genericParameterCount, 2);
 });
 
 test('parseSource extracts Phase 1 top-level declaration coverage', () => {
@@ -575,6 +605,7 @@ test('parseSource keeps generic type references separate from generic calls', ()
       'fn void use() {',
       '    List{int} a;',
       '    Result{int, Parse_Error} test = ok{int, Parse_Error}(1);',
+      '    result::Result{int, Parse_Error} qualified;',
       '    result::ok{int, Parse_Error}(1);',
       '    Foo{int, double} g;',
       '    foo_test::test{int, double}(1.0, &g);',

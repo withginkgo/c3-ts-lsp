@@ -22,6 +22,9 @@ export type C3Symbol = {
   parameters: string[];
   parameterDetails?: C3Parameter[];
   genericParameterCount?: number;
+  moduleGenericParams?: string[];
+  declaredGenericParams?: string[];
+  effectiveGenericParams?: string[];
   macroBodyName?: string;
   macroBodyParameters?: C3Parameter[];
   contracts?: C3Contract[];
@@ -47,9 +50,12 @@ export type C3TypeDeclarationInfo = {
   kind: C3TypeDeclarationKind;
   isGeneric: boolean;
   genericParameterCount: number;
+  moduleGenericParams?: string[];
+  declaredGenericParams?: string[];
+  effectiveGenericParams?: string[];
   range: Range;
   selectionRange: Range;
-  genericSource?: 'declaration' | 'module';
+  genericSource?: 'declaration' | 'module' | 'mixed';
 };
 
 export type C3Parameter = {
@@ -98,14 +104,17 @@ export type C3ModuleAlias = {
   targetRange: Range;
 };
 
-export type ModuleIndex = {
+export type ModuleScope = {
   name: string;
   files: string[];
+  genericParams: string[];
   symbols: Map<string, C3Symbol[]>;
   allSymbols: Map<string, C3Symbol[]>;
   imports: Set<string>;
   moduleAliases: Map<string, string>;
 };
+
+export type ModuleIndex = ModuleScope;
 
 export type SourceKind = 'workspace' | 'stdlib' | 'dependency';
 
@@ -117,6 +126,7 @@ export type ParsedDocument = {
   symbols: C3Symbol[];
   scopedSymbols: C3Symbol[];
   moduleName: string;
+  moduleGenericParams: string[];
   moduleAttributes: string[];
   imports: string[];
   importSpecs: C3Import[];

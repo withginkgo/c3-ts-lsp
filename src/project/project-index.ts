@@ -128,7 +128,7 @@ export class ProjectIndex {
       );
     }
 
-    return symbols;
+    return uniqueSymbolsByCanonicalModuleKey(symbols);
   }
 
   visibleSymbolsAt(currentUri: string, position: Position): C3Symbol[] {
@@ -421,7 +421,11 @@ export class ProjectIndex {
     ref: string,
   ): C3Symbol[] {
     const currentModule = this.modulesByName.get(current.moduleName);
-    const local = currentModule?.symbols.get(ref) ?? [];
+    const local = modulePathAddressableSymbols(
+      currentModule,
+      ref,
+      current.moduleName,
+    );
 
     if (local.length > 0) return local;
 
@@ -429,13 +433,15 @@ export class ProjectIndex {
 
     for (const importedModule of this.visibleImportedAndChildModules(current)) {
       imported.push(
-        ...(importedModule.symbols.get(ref) ?? []).filter((symbol) =>
-          isVisibleFrom(symbol, current.moduleName),
+        ...modulePathAddressableSymbols(
+          importedModule,
+          ref,
+          current.moduleName,
         ),
       );
     }
 
-    return imported;
+    return uniqueSymbolsByCanonicalModuleKey(imported);
   }
 
   resolveModuleFromPrefix(
@@ -611,10 +617,12 @@ export class ProjectIndex {
     // 1. 直接按完整模块名查找
     const directModule = this.modulesByName.get(modulePrefix);
     if (directModule) {
-      return (
-        directModule.allSymbols
-          .get(symbolName)
-          ?.filter((symbol) => isVisibleFrom(symbol, current.moduleName)) ?? []
+      return uniqueSymbolsByCanonicalModuleKey(
+        modulePathAddressableSymbols(
+          directModule,
+          symbolName,
+          current.moduleName,
+        ),
       );
     }
 
@@ -625,11 +633,12 @@ export class ProjectIndex {
     if (aliased) {
       const aliasedModule = this.resolveImportedModule(current, aliased);
       if (aliasedModule) {
-        return (
-          aliasedModule.allSymbols
-            .get(symbolName)
-            ?.filter((symbol) => isVisibleFrom(symbol, current.moduleName)) ??
-          []
+        return uniqueSymbolsByCanonicalModuleKey(
+          modulePathAddressableSymbols(
+            aliasedModule,
+            symbolName,
+            current.moduleName,
+          ),
         );
       }
     }
@@ -641,13 +650,14 @@ export class ProjectIndex {
         if (lastSegment === modulePrefix) {
           const importedModule = this.resolveImportedModule(current, imp);
           if (importedModule) {
-            const symbols =
-              importedModule.allSymbols
-                .get(symbolName)
-                ?.filter((symbol) =>
-                  isVisibleFrom(symbol, current.moduleName),
-                ) ?? [];
-            if (symbols.length > 0) return symbols;
+            const symbols = modulePathAddressableSymbols(
+              importedModule,
+              symbolName,
+              current.moduleName,
+            );
+            if (symbols.length > 0) {
+              return uniqueSymbolsByCanonicalModuleKey(symbols);
+            }
           }
         }
       }
@@ -659,17 +669,25 @@ export class ProjectIndex {
       modulePrefix,
     );
     if (importedChild) {
-      return (
-        importedChild.allSymbols
-          .get(symbolName)
-          ?.filter((symbol) => isVisibleFrom(symbol, current.moduleName)) ?? []
+      return uniqueSymbolsByCanonicalModuleKey(
+        modulePathAddressableSymbols(
+          importedChild,
+          symbolName,
+          current.moduleName,
+        ),
       );
     }
 
     // 5. 尝试当前模块的相对路径解析
     const relativeModuleName = `${current.moduleName}::${modulePrefix}`;
     const relativeModule = this.modulesByName.get(relativeModuleName);
-    return relativeModule?.allSymbols.get(symbolName) ?? [];
+    return uniqueSymbolsByCanonicalModuleKey(
+      modulePathAddressableSymbols(
+        relativeModule,
+        symbolName,
+        current.moduleName,
+      ),
+    );
   }
 
   private visibleUnqualifiedNestedCandidates(
@@ -691,7 +709,9 @@ export class ProjectIndex {
       }
     }
 
-    if (importedCandidates.length > 0) return importedCandidates;
+    if (importedCandidates.length > 0) {
+      return uniqueSymbolsByCanonicalModuleKey(importedCandidates);
+    }
 
     return [];
   }
@@ -1269,7 +1289,7 @@ export class ProjectIndex {
       );
     }
 
-    return symbols;
+    return uniqueSymbolsByCanonicalModuleKey(symbols);
   }
 
   private visibleImportedAndChildModules(
@@ -1442,6 +1462,7 @@ export class ProjectIndex {
       mod = {
         name: parsed.moduleName,
         files: [],
+        genericParams: [],
         symbols: new Map(),
         allSymbols: new Map(),
         imports: new Set(),
@@ -1452,6 +1473,9 @@ export class ProjectIndex {
     }
 
     mod.files.push(parsed.uri);
+    if (parsed.moduleGenericParams.length > mod.genericParams.length) {
+      mod.genericParams = parsed.moduleGenericParams;
+    }
 
     for (const imp of parsed.imports) {
       mod.imports.add(imp);
@@ -1636,6 +1660,18 @@ function findUnqualifiedNestedUsageSymbol(
     ?.find((symbol) => symbol.kind === SymbolKind.Constant);
 }
 
+function modulePathAddressableSymbols(
+  mod: ModuleIndex | undefined,
+  ref: string,
+  requesterModuleName: string,
+): C3Symbol[] {
+  return (mod?.symbols.get(ref) ?? []).filter(
+    (symbol) =>
+      symbol.kind !== SymbolKind.Method &&
+      isVisibleFrom(symbol, requesterModuleName),
+  );
+}
+
 function isVisibleFrom(symbol: C3Symbol, moduleName: string): boolean {
   if (symbol.moduleName === moduleName) return true;
 
@@ -1800,6 +1836,30 @@ function uniqueSymbols(symbols: C3Symbol[]): C3Symbol[] {
   }
 
   return unique;
+}
+
+function uniqueSymbolsByCanonicalModuleKey(symbols: C3Symbol[]): C3Symbol[] {
+  const seen = new Set<string>();
+  const unique: C3Symbol[] = [];
+
+  for (const symbol of symbols) {
+    const key = canonicalSymbolTableKey(symbol);
+    if (seen.has(key)) continue;
+
+    seen.add(key);
+    unique.push(symbol);
+  }
+
+  return unique;
+}
+
+function canonicalSymbolTableKey(symbol: C3Symbol): string {
+  const receiver =
+    symbol.kind === SymbolKind.Method
+      ? terminalTypeName(symbol.receiverType ?? '')
+      : '';
+
+  return [symbol.moduleName, receiver, symbol.name, symbol.kind].join('|');
 }
 
 function methodShapeKey(symbol: C3Symbol): string {

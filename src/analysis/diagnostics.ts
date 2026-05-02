@@ -398,7 +398,7 @@ function callableGenericArgumentMatches(
 
   return candidates.filter(
     (symbol) =>
-      (symbol.genericParameterCount ?? 0) === target.genericArgs.length,
+      genericParameterCountForSymbol(symbol) === target.genericArgs.length,
   );
 }
 
@@ -408,7 +408,7 @@ function genericArgumentCountDiagnostic(
   range: Range,
 ): Diagnostic {
   const expectedCounts = uniqueNumbers(
-    candidates.map((symbol) => symbol.genericParameterCount ?? 0),
+    candidates.map(genericParameterCountForSymbol),
   );
   const expected =
     expectedCounts.length === 1
@@ -421,6 +421,16 @@ function genericArgumentCountDiagnostic(
     message: `Generic function '${target.ref}' expects ${expected} generic argument${expected === '1' ? '' : 's'}, got ${target.genericArgs.length}`,
     source: diagnosticSource,
   };
+}
+
+function genericParameterCountForSymbol(symbol: C3Symbol): number {
+  return (
+    symbol.effectiveGenericParams?.length ??
+    symbol.genericParameterCount ??
+    symbol.typeInfo?.effectiveGenericParams?.length ??
+    symbol.typeInfo?.genericParameterCount ??
+    0
+  );
 }
 
 function callArgumentShapeMatches(
