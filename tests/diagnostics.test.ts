@@ -1512,6 +1512,176 @@ test('semanticDiagnostics accepts generic module instantiation on result types a
   assert.deepEqual(semanticDiagnostics(index, result), []);
 });
 
+test('semanticDiagnostics reports function calls in global initializers', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    ['module test;', 'fn int foo() { return 1; }', 'int a = foo();', ''].join(
+      '\n',
+    ),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(
+    semanticDiagnostics(index, parsed).map((diagnostic) => diagnostic.message),
+    ['The expression must be a constant value.'],
+  );
+});
+
+test('semanticDiagnostics reports generic module calls in global initializers as non-constant', () => {
+  const index = new ProjectIndex();
+  const app = parseSource(
+    'file:///workspace/mem_exercise/src/main.c3',
+    [
+      'module mem_exercise;',
+      'import std::collections::result;',
+      'struct Parse_Error {',
+      '    int line;',
+      '    String message;',
+      '}',
+      'Result{int, Parse_Error} test = result::ok(1);',
+      '',
+    ].join('\n'),
+  );
+  const result = parseSource(
+    'file:///stdlib/std/collections/result.c3',
+    [
+      'module std::collections::result <OkType, ErrType>;',
+      'struct Result {}',
+      'fn Result ok(OkType val) { return {}; }',
+      'fn OkType? Result.ok(&self);',
+      '',
+    ].join('\n'),
+    { sourceKind: 'stdlib' },
+  );
+
+  index.upsert(app, false);
+  index.upsert(result, false);
+  index.rebuild();
+
+  assert.deepEqual(
+    semanticDiagnostics(index, app).map((diagnostic) => diagnostic.message),
+    ['The expression must be a constant value.'],
+  );
+});
+
+test('semanticDiagnostics accepts runtime local initializers', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module test;',
+      'fn int foo() { return 1; }',
+      'fn int main(String[] args) {',
+      '    int a = foo();',
+      '    return 0;',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(semanticDiagnostics(index, parsed), []);
+});
+
+test('semanticDiagnostics accepts constant global initializers and zero initialization', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module test;',
+      'const int C = 4;',
+      'int a = 1 + 2 * 3;',
+      'int b;',
+      'int c = C;',
+      'int d = (int)(1 + 2);',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(semanticDiagnostics(index, parsed), []);
+});
+
+test('semanticDiagnostics reports compound literals in global initializers', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    ['module test;', 'int[] values = { 1, 2 };', ''].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(
+    semanticDiagnostics(index, parsed).map((diagnostic) => diagnostic.message),
+    ['The expression must be a constant value.'],
+  );
+});
+
+test('semanticDiagnostics reports non-constant static and tlocal initializers', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module test;',
+      'fn int foo() { return 1; }',
+      'fn int main(String[] args) {',
+      '    static int a = foo();',
+      '    tlocal int b = foo();',
+      '    return 0;',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(
+    semanticDiagnostics(index, parsed).map((diagnostic) => diagnostic.message),
+    [
+      'The expression must be a constant value.',
+      'The expression must be a constant value.',
+    ],
+  );
+});
+
+test('semanticDiagnostics reports extern and multiple declaration initializers', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module test;',
+      'extern int a = 1;',
+      'int b, c = 2;',
+      'fn int main(String[] args) {',
+      '    int x, y = 1;',
+      '    return 0;',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(
+    semanticDiagnostics(index, parsed).map((diagnostic) => diagnostic.message),
+    [
+      'Extern globals may not have initializers.',
+      'Initialization is not allowed with multiple declarations.',
+      'Initialization is not allowed with multiple declarations.',
+    ],
+  );
+});
+
 test('semanticDiagnostics validates call arguments, initializers, assignments, and conditions', () => {
   const index = new ProjectIndex();
   const uri = 'file:///workspace/app.c3';

@@ -12,6 +12,7 @@ import { callableParameters, isCallableSymbol } from '../shared/callable.js';
 import { callTargetFor } from '../shared/calls.js';
 import { isOptionalTypeName, typeNamesCompatible } from '../shared/type-ref.js';
 import type { C3Parameter, C3Symbol, ParsedDocument } from '../shared/types.js';
+import { checkConstExpr } from './const-expr.js';
 import {
   expressionTypeName,
   isBoolType,
@@ -157,6 +158,7 @@ export function expressionDiagnostics(
 ): Diagnostic[] {
   return [
     ...rethrowDiagnostics(index, parsed),
+    ...globalInitializerDiagnostics(index, parsed),
     ...initializerDiagnostics(index, parsed),
     ...assignmentDiagnostics(index, parsed),
     ...conditionDiagnostics(index, parsed),
@@ -347,6 +349,54 @@ function entryPointDiagnostics(parsed: ParsedDocument): Diagnostic[] {
   return diagnostics;
 }
 
+function globalInitializerDiagnostics(
+  index: ProjectIndex,
+  parsed: ParsedDocument,
+): Diagnostic[] {
+  const diagnostics: Diagnostic[] = [];
+
+  for (const declaration of declarationNodes(parsed.tree.rootNode)) {
+    const value = declaration.childForFieldName('right');
+    if (!value) continue;
+
+    const context = variableInitializerContext(declaration);
+
+    if (context.externGlobal) {
+      diagnostics.push({
+        severity: DiagnosticSeverity.Error,
+        range: rangeFromNode(value),
+        message: 'Extern globals may not have initializers.',
+        source: diagnosticSource,
+      });
+      continue;
+    }
+
+    if (context.multipleDeclaration) {
+      diagnostics.push({
+        severity: DiagnosticSeverity.Error,
+        range: rangeFromNode(value),
+        message: 'Initialization is not allowed with multiple declarations.',
+        source: diagnosticSource,
+      });
+      continue;
+    }
+
+    if (!context.requiresGlobalInitExpression) continue;
+
+    const result = checkConstExpr(value, { index, parsed });
+    if (result.kind !== 'not_const') continue;
+
+    diagnostics.push({
+      severity: DiagnosticSeverity.Error,
+      range: rangeFromNode(value),
+      message: 'The expression must be a constant value.',
+      source: diagnosticSource,
+    });
+  }
+
+  return diagnostics;
+}
+
 function initializerDiagnostics(
   index: ProjectIndex,
   parsed: ParsedDocument,
@@ -377,6 +427,35 @@ function initializerDiagnostics(
   }
 
   return diagnostics;
+}
+
+type VariableInitializerContext = {
+  externGlobal: boolean;
+  multipleDeclaration: boolean;
+  requiresGlobalInitExpression: boolean;
+};
+
+function variableInitializerContext(
+  declaration: SyntaxNode,
+): VariableInitializerContext {
+  const isConst = declaration.type === 'const_declaration';
+  const isGlobal = declaration.parent?.type === 'global_declaration';
+  const isStatic = hasDirectToken(declaration, 'static');
+  const isThreadLocal = hasDirectToken(declaration, 'tlocal');
+  const externGlobal =
+    isGlobal &&
+    !!declaration.parent &&
+    hasDirectToken(declaration.parent, 'extern');
+  const multipleDeclaration =
+    declaration.type === 'declaration' &&
+    !!directChildOfType(declaration, 'identifier_list')?.namedChildren.length;
+
+  return {
+    externGlobal,
+    multipleDeclaration,
+    requiresGlobalInitExpression:
+      isGlobal || isStatic || isThreadLocal || isConst,
+  };
 }
 
 function assignmentDiagnostics(
@@ -923,6 +1002,21 @@ function sameSyntaxNode(
     left.startIndex === right.startIndex &&
     left.endIndex === right.endIndex
   );
+}
+
+function directChildOfType(
+  node: SyntaxNode,
+  type: string,
+): SyntaxNode | undefined {
+  return node.namedChildren.find((child) => child.type === type);
+}
+
+function hasDirectToken(node: SyntaxNode, type: string): boolean {
+  for (let index = 0; index < node.childCount; index++) {
+    if (node.child(index)?.type === type) return true;
+  }
+
+  return false;
 }
 
 function lastDescendantOfTypes(
