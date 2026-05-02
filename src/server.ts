@@ -76,8 +76,12 @@ let configuredProjectTarget: string | undefined;
 let compilerDiagnosticsByUri = new Map<string, Diagnostic[]>();
 let compilerDiagnosticsTimer: ReturnType<typeof setTimeout> | null = null;
 let compilerDiagnosticsGeneration = 0;
+let semanticDiagnosticsTimer: ReturnType<typeof setTimeout> | null = null;
+const pendingSemanticDiagnosticUris = new Set<string>();
 
+const semanticDiagnosticsDebounceMs = 120;
 const compilerDiagnosticsDebounceMs = 500;
+type DiagnosticPublishMode = 'document' | 'syntax' | 'workspace' | 'none';
 
 connection.onInitialize((params: InitializeParams): InitializeResult => {
   workspaceRoot = resolveWorkspaceRoot(params, {
@@ -154,12 +158,15 @@ connection.onInitialized(() => {
 });
 
 documents.onDidOpen((event) => {
-  parseAndIndexDocument(event.document);
+  parseAndIndexDocument(event.document, { diagnostics: 'document' });
 });
 
 documents.onDidChangeContent((event) => {
   clearCompilerDiagnostics(event.document.uri);
-  parseAndIndexDocument(event.document);
+  const parsed = parseAndIndexDocument(event.document, {
+    diagnostics: 'syntax',
+  });
+  scheduleSemanticDiagnostics(parsed.uri);
 });
 
 documents.onDidClose((event) => {
@@ -167,6 +174,10 @@ documents.onDidClose((event) => {
 });
 
 connection.onShutdown(() => {
+  if (semanticDiagnosticsTimer) {
+    clearTimeout(semanticDiagnosticsTimer);
+    semanticDiagnosticsTimer = null;
+  }
   if (compilerDiagnosticsTimer) {
     clearTimeout(compilerDiagnosticsTimer);
     compilerDiagnosticsTimer = null;
@@ -431,16 +442,34 @@ function reloadWorkspaceProjectModel(): void {
   connection.console.log('reloaded C3 project model');
 }
 
-function parseAndIndexDocument(doc: TextDocument): void {
+function parseAndIndexDocument(
+  doc: TextDocument,
+  options: { diagnostics?: DiagnosticPublishMode } = {},
+): ReturnType<typeof parseSource> {
   const parsed = parseSource(doc.uri, doc.getText(), {
     sourceKind: sourceKindForUri(doc.uri),
   });
   projectIndex.upsert(parsed);
-  publishWorkspaceDiagnostics();
+
+  switch (options.diagnostics ?? 'workspace') {
+    case 'document':
+      publishDiagnostics(parsed);
+      break;
+    case 'syntax':
+      publishSyntaxDiagnostics(parsed);
+      break;
+    case 'workspace':
+      publishWorkspaceDiagnostics();
+      break;
+    case 'none':
+      break;
+  }
 
   connection.console.log(
     `indexed ${doc.uri}: module=${parsed.moduleName}, symbols=${parsed.symbols.length}`,
   );
+
+  return parsed;
 }
 
 function restoreClosedDocumentFromDisk(uri: string): void {
@@ -451,7 +480,7 @@ function indexDocumentFromDisk(uri: string): void {
   const openDocument = documents.get(uri);
 
   if (openDocument) {
-    parseAndIndexDocument(openDocument);
+    parseAndIndexDocument(openDocument, { diagnostics: 'document' });
     scheduleCompilerDiagnostics();
     return;
   }
@@ -517,6 +546,43 @@ function publishDiagnostics(parsed: ReturnType<typeof parseSource>): void {
     uri: parsed.uri,
     diagnostics,
   });
+}
+
+function publishSyntaxDiagnostics(
+  parsed: ReturnType<typeof parseSource>,
+): void {
+  if (parsed.sourceKind !== 'workspace') return;
+
+  connection.sendDiagnostics({
+    uri: parsed.uri,
+    diagnostics: [
+      ...parsed.diagnostics,
+      ...(compilerDiagnosticsByUri.get(parsed.uri) ?? []),
+    ],
+  });
+}
+
+function scheduleSemanticDiagnostics(uri: string): void {
+  pendingSemanticDiagnosticUris.add(uri);
+
+  if (semanticDiagnosticsTimer) {
+    clearTimeout(semanticDiagnosticsTimer);
+  }
+
+  semanticDiagnosticsTimer = setTimeout(() => {
+    semanticDiagnosticsTimer = null;
+    publishPendingSemanticDiagnostics();
+  }, semanticDiagnosticsDebounceMs);
+}
+
+function publishPendingSemanticDiagnostics(): void {
+  const uris = [...pendingSemanticDiagnosticUris];
+  pendingSemanticDiagnosticUris.clear();
+
+  for (const uri of uris) {
+    const parsed = projectIndex.getParsed(uri);
+    if (parsed) publishDiagnostics(parsed);
+  }
 }
 
 function publishWorkspaceDiagnostics(): void {
