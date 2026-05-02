@@ -20,7 +20,6 @@ import {
   parseTypeRef,
   terminalTypeName,
   typeNamesCompatible,
-  type C3TypeRef,
 } from '../shared/type-ref.js';
 import type { C3Parameter, C3Symbol, ParsedDocument } from '../shared/types.js';
 import { compileTimeDiagnostics } from './compile-time-diagnostics.js';
@@ -38,13 +37,16 @@ import {
   comparableTypeCategory,
   expressionTypeName,
 } from './type-analysis.js';
+import { expectedTypeForExpression } from './expression-context.js';
+import {
+  callArgumentShapeMatches,
+  callableGenericArgumentMatches,
+  genericParameterCountForSymbol,
+  instantiateCallableForCall,
+  nextPositionalIndex,
+} from './generic-call-inference.js';
 
 const diagnosticSource = 'c3-lsp';
-const transparentExpressionTypes = new Set([
-  'paren_expr',
-  'optional_expr',
-  'rethrow_expr',
-]);
 
 export function semanticDiagnostics(
   index: ProjectIndex,
@@ -420,303 +422,6 @@ function resolveCallDiagnostics(
   ];
 }
 
-function expectedTypeForExpression(
-  index: ProjectIndex,
-  parsed: ParsedDocument,
-  expression: SyntaxNode,
-): string | undefined {
-  let current = expression;
-  let parent = current.parent;
-
-  while (parent && transparentExpressionTypes.has(parent.type)) {
-    current = parent;
-    parent = current.parent;
-  }
-
-  if (parent?.type === 'declaration') {
-    const right = parent.childForFieldName('right');
-    if (right && sameNode(right, current)) {
-      return parent.childForFieldName('type')?.text;
-    }
-  }
-
-  if (parent?.type === 'assignment_expr') {
-    const right =
-      parent.childForFieldName('right') ?? parent.namedChildren.at(-1);
-    if (right && sameNode(right, current)) {
-      const left = parent.childForFieldName('left') ?? parent.namedChildren[0];
-      return left ? expressionTypeName(index, parsed, left) : undefined;
-    }
-  }
-
-  if (parent?.type === 'return_stmt') {
-    const returned = returnExpression(parent);
-    if (returned && sameNode(returned, current)) {
-      return enclosingCallableReturnType(parent);
-    }
-  }
-
-  return undefined;
-}
-
-function returnExpression(statement: SyntaxNode): SyntaxNode | undefined {
-  return statement.namedChildren.find((child) => !child.isMissing);
-}
-
-function enclosingCallableReturnType(node: SyntaxNode): string | undefined {
-  const callable =
-    ancestorOfType(node, 'func_definition') ??
-    ancestorOfType(node, 'macro_declaration');
-  const header = callable
-    ? (directChildOfType(callable, 'func_header') ??
-      directChildOfType(callable, 'macro_header'))
-    : undefined;
-
-  return header?.childForFieldName('return_type')?.text;
-}
-
-function callableGenericArgumentMatches(
-  candidates: C3Symbol[],
-  target: C3CallTarget,
-): C3Symbol[] {
-  if (!target.genericRange) return candidates;
-
-  return candidates.filter(
-    (symbol) =>
-      genericParameterCountForSymbol(symbol) === target.genericArgs.length,
-  );
-}
-
-type InstantiatedCallable = {
-  parameters: C3Parameter[];
-  unresolvedGenericParams: Set<string>;
-};
-
-function instantiateCallableForCall(
-  symbol: C3Symbol,
-  index: ProjectIndex,
-  parsed: ParsedDocument,
-  target: C3CallTarget,
-  args: C3CallArgument[],
-  expectedType: string | undefined,
-): InstantiatedCallable {
-  const parameters = callableParameters(symbol, {
-    methodStyle: target.methodStyle,
-  });
-  const genericParams = symbol.effectiveGenericParams ?? [];
-  if (genericParams.length === 0) {
-    return { parameters, unresolvedGenericParams: new Set() };
-  }
-
-  const genericParamSet = new Set(genericParams);
-  const substitution = new Map<string, string>();
-
-  if (
-    target.genericRange &&
-    target.genericArgs.length === genericParams.length
-  ) {
-    for (let index = 0; index < genericParams.length; index++) {
-      substitution.set(genericParams[index]!, target.genericArgs[index]!.text);
-    }
-  } else {
-    collectGenericConstraintsFromExpectedReturnType(
-      symbol,
-      expectedType,
-      genericParamSet,
-      substitution,
-    );
-    collectGenericConstraintsFromArguments(
-      index,
-      parsed,
-      parameters,
-      args,
-      genericParamSet,
-      substitution,
-    );
-  }
-
-  const unresolvedGenericParams = new Set(
-    genericParams.filter((param) => !substitution.has(param)),
-  );
-
-  return {
-    parameters: parameters.map((parameter) => ({
-      ...parameter,
-      label: substituteGenericParams(parameter.label, substitution),
-      type: parameter.type
-        ? substituteGenericParams(parameter.type, substitution)
-        : undefined,
-    })),
-    unresolvedGenericParams,
-  };
-}
-
-function collectGenericConstraintsFromExpectedReturnType(
-  symbol: C3Symbol,
-  expectedType: string | undefined,
-  genericParams: Set<string>,
-  substitution: Map<string, string>,
-): void {
-  const returnType = symbol.functionType?.returnType ?? symbol.returnType;
-  if (!returnType || !expectedType) return;
-
-  const expected = parseTypeRef(expectedType);
-  const actual = parseTypeRef(returnType);
-  if (!expected || !actual || !sameNominalType(actual, expected)) return;
-
-  unifyTypeRefs(actual, expected, genericParams, substitution);
-
-  if (
-    actual.arguments.length === 0 &&
-    expected.arguments.length === (symbol.moduleGenericParams?.length ?? 0)
-  ) {
-    for (let index = 0; index < expected.arguments.length; index++) {
-      const param = symbol.moduleGenericParams?.[index];
-      const arg = expected.arguments[index];
-      if (param && arg && genericParams.has(param)) {
-        bindGenericParam(param, arg.source, substitution);
-      }
-    }
-  }
-}
-
-function collectGenericConstraintsFromArguments(
-  index: ProjectIndex,
-  parsed: ParsedDocument,
-  parameters: C3Parameter[],
-  args: C3CallArgument[],
-  genericParams: Set<string>,
-  substitution: Map<string, string>,
-): void {
-  const supplied = new Set<number>();
-  const variadicIndex = parameters.findIndex((parameter) => parameter.variadic);
-  let positionalCursor = 0;
-
-  for (const arg of args) {
-    const parameterIndex = parameterIndexForCallArgument(
-      parameters,
-      arg,
-      supplied,
-      positionalCursor,
-      variadicIndex,
-    );
-    if (parameterIndex === undefined) continue;
-
-    supplied.add(parameterIndex);
-    if (!arg.name) positionalCursor = parameterIndex + 1;
-
-    const parameter = parameters[parameterIndex];
-    const value = callArgumentValueNode(arg.node);
-    if (!parameter?.type || !value) continue;
-
-    const actualType = expressionTypeName(index, parsed, value);
-    if (!actualType) continue;
-
-    unifyTypeNames(parameter.type, actualType, genericParams, substitution);
-  }
-}
-
-function parameterIndexForCallArgument(
-  parameters: C3Parameter[],
-  arg: C3CallArgument,
-  supplied: Set<number>,
-  positionalCursor: number,
-  variadicIndex: number,
-): number | undefined {
-  if (arg.name) {
-    const namedIndex = parameters.findIndex(
-      (parameter) => parameter.name === arg.name,
-    );
-    return namedIndex >= 0 && !supplied.has(namedIndex)
-      ? namedIndex
-      : undefined;
-  }
-
-  const positionalIndex = nextPositionalIndex(
-    parameters,
-    supplied,
-    positionalCursor,
-    variadicIndex,
-  );
-
-  if (variadicIndex >= 0 && positionalIndex >= variadicIndex) {
-    return variadicIndex;
-  }
-
-  return positionalIndex < parameters.length ? positionalIndex : undefined;
-}
-
-function unifyTypeNames(
-  genericType: string,
-  concreteType: string,
-  genericParams: Set<string>,
-  substitution: Map<string, string>,
-): void {
-  const genericRef = parseTypeRef(genericType);
-  const concreteRef = parseTypeRef(concreteType);
-  if (!genericRef || !concreteRef) return;
-
-  unifyTypeRefs(genericRef, concreteRef, genericParams, substitution);
-}
-
-function unifyTypeRefs(
-  genericRef: C3TypeRef,
-  concreteRef: C3TypeRef,
-  genericParams: Set<string>,
-  substitution: Map<string, string>,
-): void {
-  if (genericParams.has(genericRef.normalized)) {
-    bindGenericParam(genericRef.normalized, concreteRef.source, substitution);
-    return;
-  }
-
-  if (!sameNominalType(genericRef, concreteRef)) return;
-  if (genericRef.arguments.length !== concreteRef.arguments.length) return;
-
-  for (let index = 0; index < genericRef.arguments.length; index++) {
-    const genericArg = genericRef.arguments[index];
-    const concreteArg = concreteRef.arguments[index];
-    if (!genericArg || !concreteArg) continue;
-
-    unifyTypeRefs(genericArg, concreteArg, genericParams, substitution);
-  }
-}
-
-function bindGenericParam(
-  param: string,
-  concreteType: string,
-  substitution: Map<string, string>,
-): void {
-  const existing = substitution.get(param);
-  if (!existing) {
-    substitution.set(param, concreteType);
-    return;
-  }
-
-  if (typeNamesCompatible(concreteType, existing)) return;
-}
-
-function substituteGenericParams(
-  text: string,
-  substitution: Map<string, string>,
-): string {
-  let result = text;
-
-  for (const [param, replacement] of substitution) {
-    const escaped = param.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    result = result.replace(
-      new RegExp(`(^|[^A-Za-z0-9_$@])${escaped}(?=$|[^A-Za-z0-9_$@])`, 'g'),
-      `$1${replacement}`,
-    );
-  }
-
-  return result;
-}
-
-function sameNominalType(a: C3TypeRef, b: C3TypeRef): boolean {
-  return a.nominal === b.nominal || a.terminal === b.terminal;
-}
-
 function genericArgumentCountDiagnostic(
   target: C3CallTarget,
   candidates: C3Symbol[],
@@ -736,59 +441,6 @@ function genericArgumentCountDiagnostic(
     message: `Generic function '${target.ref}' expects ${expected} generic argument${expected === '1' ? '' : 's'}, got ${target.genericArgs.length}`,
     source: diagnosticSource,
   };
-}
-
-function genericParameterCountForSymbol(symbol: C3Symbol): number {
-  return (
-    symbol.effectiveGenericParams?.length ??
-    symbol.genericParameterCount ??
-    symbol.typeInfo?.effectiveGenericParams?.length ??
-    symbol.typeInfo?.genericParameterCount ??
-    0
-  );
-}
-
-function callArgumentShapeMatches(
-  parameters: C3Parameter[],
-  args: C3CallArgument[],
-): boolean {
-  const supplied = new Set<number>();
-  const variadicIndex = parameters.findIndex((parameter) => parameter.variadic);
-  let positionalCursor = 0;
-
-  for (const arg of args) {
-    if (arg.name) {
-      const namedIndex = parameters.findIndex(
-        (parameter) => parameter.name === arg.name,
-      );
-      if (namedIndex < 0 || supplied.has(namedIndex)) return false;
-
-      supplied.add(namedIndex);
-      continue;
-    }
-
-    const positionalIndex = nextPositionalIndex(
-      parameters,
-      supplied,
-      positionalCursor,
-      variadicIndex,
-    );
-
-    if (variadicIndex >= 0 && positionalIndex >= variadicIndex) {
-      supplied.add(variadicIndex);
-      continue;
-    }
-
-    if (positionalIndex >= parameters.length) return false;
-
-    supplied.add(positionalIndex);
-    positionalCursor = positionalIndex + 1;
-  }
-
-  return parameters.every(
-    (parameter, index) =>
-      parameter.optional || parameter.variadic || supplied.has(index),
-  );
 }
 
 function isMacroBodyParameterCall(
@@ -1086,22 +738,6 @@ function containsGenericParam(
   }
 
   return false;
-}
-
-function nextPositionalIndex(
-  parameters: C3Parameter[],
-  supplied: Set<number>,
-  cursor: number,
-  variadicIndex: number,
-): number {
-  let index = cursor;
-
-  while (index < parameters.length && supplied.has(index)) {
-    index++;
-  }
-
-  if (variadicIndex >= 0 && index >= variadicIndex) return variadicIndex;
-  return index;
 }
 
 function argumentRangeLabel(parameters: C3Parameter[]): string {
