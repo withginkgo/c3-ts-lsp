@@ -12,7 +12,10 @@ import {
   initializerListAtPosition,
 } from '../analysis/expression-context.js';
 import { parseSource } from '../parser/c3-parser.js';
-import type { ProjectIndex } from '../project/project-index.js';
+import type {
+  ModuleCompletionCandidate,
+  ProjectIndex,
+} from '../project/project-index.js';
 import { callableParameters, isCallableSymbol } from '../shared/callable.js';
 import {
   C3_BUILTIN_ATTRIBUTES,
@@ -28,13 +31,14 @@ import {
   identifierCompletionBeforeCursor,
   memberAccessBeforeCursor,
   methodContext,
+  moduleNamespaceCompletionBeforeCursor,
   modulePathCompletionBeforeCursor,
-  modulePrefixBeforeCursor,
   namedArgumentsBeforeCursor,
   structInitializerFieldBeforeCursor,
   type AttributeCompletionContext,
   type CallArgumentContext,
   type IdentifierCompletionContext,
+  type ModuleNamespaceCompletionContext,
   type ModulePathCompletionContext,
   type StructInitializerFieldCompletionContext,
   typeMethodDeclarationBeforeCursor,
@@ -53,19 +57,30 @@ export function completionItems(
 ): CompletionItem[] {
   if (!doc || !current) return keywordCompletions();
 
-  const contractItems = contractCompletionItems(index, doc, current, position);
+  const currentSyntax = parsedForCompletionSyntax(doc, current);
+  const contractItems = contractCompletionItems(
+    index,
+    doc,
+    currentSyntax,
+    position,
+  );
   if (contractItems) return contractItems;
 
   const modulePathCompletion = modulePathCompletionBeforeCursor(doc, position);
 
   if (modulePathCompletion) {
-    return modulePathCompletions(index, current, modulePathCompletion);
+    return modulePathCompletions(index, currentSyntax, modulePathCompletion);
   }
 
   const attributeCompletion = attributeCompletionBeforeCursor(doc, position);
 
   if (attributeCompletion) {
-    return attributeCompletions(index, current, position, attributeCompletion);
+    return attributeCompletions(
+      index,
+      currentSyntax,
+      position,
+      attributeCompletion,
+    );
   }
 
   const typeMethodDeclaration = typeMethodDeclarationBeforeCursor(
@@ -76,7 +91,7 @@ export function completionItems(
   if (typeMethodDeclaration) {
     return methodCompletionsForType(
       index,
-      current,
+      currentSyntax,
       typeMethodDeclaration.receiver,
       typeMethodDeclaration.position,
     );
@@ -87,7 +102,7 @@ export function completionItems(
   if (memberAccess) {
     return memberCompletions(
       index,
-      current,
+      currentSyntax,
       memberAccess.receiver,
       memberAccess.position,
     );
@@ -101,7 +116,7 @@ export function completionItems(
   if (structInitializerField) {
     return structInitializerFieldCompletions(
       index,
-      current,
+      currentSyntax,
       position,
       structInitializerField,
     );
@@ -111,20 +126,39 @@ export function completionItems(
     return [];
   }
 
-  const prefix = modulePrefixBeforeCursor(doc, position);
+  const moduleNamespaceCompletion = moduleNamespaceCompletionBeforeCursor(
+    currentSyntax,
+    position,
+  );
 
-  if (prefix) {
-    return moduleMemberCompletions(index, current, prefix);
+  if (moduleNamespaceCompletion) {
+    return moduleMemberCompletions(
+      index,
+      currentSyntax,
+      moduleNamespaceCompletion,
+    );
   }
 
   const identifierCompletion = identifierCompletionBeforeCursor(doc, position);
-  const argumentItems = argumentNameCompletions(index, doc, current, position);
+  const argumentItems = argumentNameCompletions(
+    index,
+    doc,
+    currentSyntax,
+    position,
+  );
   const visibleSymbols = index
-    .visibleSymbolsAt(current.uri, position)
+    .visibleSymbolsAt(currentSyntax.uri, position)
     .filter((symbol) =>
       completionLabelMatchesPrefix(symbol.name, identifierCompletion.prefix),
     );
   const visibleNames = new Set(visibleSymbols.map((symbol) => symbol.name));
+  const moduleCandidates = index.moduleCompletionCandidates(
+    currentSyntax,
+    identifierCompletion.prefix,
+  );
+  const moduleLabels = new Set(
+    moduleCandidates.map((candidate) => candidate.label),
+  );
 
   const symbolItems = visibleSymbols.map((symbol) =>
     identifierCompletionItem(
@@ -132,15 +166,24 @@ export function completionItems(
       identifierCompletion,
     ),
   );
+  const moduleItems = moduleCandidates.map((candidate) =>
+    identifierCompletionItem(
+      moduleCompletionItem(candidate),
+      identifierCompletion,
+    ),
+  );
   const autoImportItems =
     identifierCompletion.prefix.length > 0
       ? index
-          .autoImportCandidates(current, identifierCompletion.prefix)
+          .autoImportCandidates(currentSyntax, identifierCompletion.prefix)
           .slice(0, MAX_AUTO_IMPORT_COMPLETIONS)
-          .filter(({ symbol }) => !visibleNames.has(symbol.name))
+          .filter(
+            ({ symbol }) =>
+              !visibleNames.has(symbol.name) && !moduleLabels.has(symbol.name),
+          )
           .map(({ moduleName, symbol }) =>
             identifierCompletionItem(
-              autoImportCompletionItem(current, moduleName, symbol),
+              autoImportCompletionItem(currentSyntax, moduleName, symbol),
               identifierCompletion,
             ),
           )
@@ -149,6 +192,7 @@ export function completionItems(
   return [
     ...argumentItems,
     ...keywordCompletions(identifierCompletion),
+    ...moduleItems,
     ...symbolItems,
     ...autoImportItems,
   ];
@@ -468,6 +512,17 @@ function autoImportCompletionItem(
   };
 }
 
+function moduleCompletionItem(
+  candidate: ModuleCompletionCandidate,
+): CompletionItem {
+  return {
+    label: candidate.label,
+    kind: CompletionItemKind.Module,
+    detail: `module ${candidate.moduleName}`,
+    sortText: candidate.sortText,
+  };
+}
+
 function identifierCompletionItem(
   item: CompletionItem,
   context?: IdentifierCompletionContext,
@@ -502,29 +557,50 @@ function methodCompletionsForType(
 function moduleMemberCompletions(
   index: ProjectIndex,
   current: ParsedDocument,
-  prefix: string,
+  context: ModuleNamespaceCompletionContext,
 ): CompletionItem[] {
-  const mod = index.resolveModuleFromPrefix(current, prefix);
   const moduleItems = index
-    .moduleChildNamesForPrefix(current, prefix)
+    .moduleChildNamesForPrefix(current, context.prefix)
+    .filter((name) => completionLabelMatchesPrefix(name, context.memberPrefix))
     .map((name) => ({
       label: name,
       kind: CompletionItemKind.Module,
-      detail: `module ${prefix}::${name}`,
-    }));
+      detail: `module ${context.prefix}::${name}`,
+    }))
+    .map((item) => moduleNamespaceCompletionItem(item, context));
 
-  if (!mod) return moduleItems;
+  const symbolItems = index
+    .moduleMemberSymbols(current, context.prefix)
+    .filter((symbol) =>
+      completionLabelMatchesPrefix(symbol.name, context.memberPrefix),
+    )
+    .map((symbol) =>
+      moduleNamespaceCompletionItem(
+        {
+          label: symbol.name,
+          kind: toCompletionKind(symbol.kind),
+          detail: symbol.signature,
+        },
+        context,
+      ),
+    );
 
-  const symbols = [...mod.symbols.values()].flat();
+  return uniqueCompletionItems([...moduleItems, ...symbolItems]);
+}
 
-  return [
-    ...moduleItems,
-    ...symbols.map((symbol) => ({
-      label: symbol.name,
-      kind: toCompletionKind(symbol.kind),
-      detail: symbol.signature,
-    })),
-  ];
+function moduleNamespaceCompletionItem(
+  item: CompletionItem,
+  context: ModuleNamespaceCompletionContext,
+): CompletionItem {
+  if (context.memberPrefix.length === 0) return item;
+
+  return {
+    ...item,
+    textEdit: {
+      range: context.replaceRange,
+      newText: String(item.label),
+    },
+  };
 }
 
 function modulePathCompletions(
@@ -561,11 +637,26 @@ function toCompletionKind(kind: SymbolKind): CompletionItemKind {
       return CompletionItemKind.Interface;
     case SymbolKind.Constant:
       return CompletionItemKind.Constant;
+    case SymbolKind.Module:
+      return CompletionItemKind.Module;
+    case SymbolKind.TypeParameter:
+      return CompletionItemKind.TypeParameter;
     case SymbolKind.Variable:
       return CompletionItemKind.Variable;
     default:
       return CompletionItemKind.Text;
   }
+}
+
+function parsedForCompletionSyntax(
+  doc: TextDocument,
+  current: ParsedDocument,
+): ParsedDocument {
+  const source = doc.getText();
+
+  return source === current.source
+    ? current
+    : parseSource(current.uri, source, { sourceKind: current.sourceKind });
 }
 
 function uniqueCompletionItems(items: CompletionItem[]): CompletionItem[] {

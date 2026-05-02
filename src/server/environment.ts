@@ -108,6 +108,7 @@ function stdlibPathsFromEnvironment(): string[] {
     process.env.C3_STDLIB_PATH,
     process.env.C3_STDLIB_ROOT,
     process.env.C3_STANDARD_LIBRARY_PATH,
+    process.env.C3C_LIB,
   ].flatMap(configuredPathValues);
   const homes = [process.env.C3_HOME, process.env.C3C_HOME]
     .flatMap(configuredPathValues)

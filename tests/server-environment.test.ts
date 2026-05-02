@@ -63,6 +63,21 @@ test('resolveStdlibRoots normalizes, deduplicates, and filters configured paths'
   }
 });
 
+test('resolveStdlibRoots accepts C3C_LIB from the compiler environment', () => {
+  const stdlib = fs.mkdtempSync(path.join(os.tmpdir(), 'c3-lsp-stdlib-'));
+
+  try {
+    const roots = withCleanStdlibEnvironment(() => {
+      process.env.C3C_LIB = stdlib;
+      return resolveStdlibRoots(initializeParams({}), null);
+    });
+
+    assert.deepEqual(roots, [stdlib]);
+  } finally {
+    fs.rmSync(stdlib, { recursive: true, force: true });
+  }
+});
+
 test('isPathInside treats the parent itself as inside', () => {
   assert.equal(isPathInside('/tmp/project/src/main.c3', '/tmp/project'), true);
   assert.equal(isPathInside('/tmp/project', '/tmp/project'), true);
@@ -88,6 +103,7 @@ function withCleanStdlibEnvironment<T>(callback: () => T): T {
     'C3_STDLIB_PATH',
     'C3_STDLIB_ROOT',
     'C3_STANDARD_LIBRARY_PATH',
+    'C3C_LIB',
     'C3_HOME',
     'C3C_HOME',
   ];

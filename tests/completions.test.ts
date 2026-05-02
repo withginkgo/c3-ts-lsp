@@ -4,12 +4,61 @@ import { test } from 'node:test';
 import {
   CompletionItemKind,
   InsertTextFormat,
+  type CompletionItem,
 } from 'vscode-languageserver/node.js';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 
 import { completionItems } from '../src/lsp/completions.js';
 import { parseSource } from '../src/parser/c3-parser.js';
 import { ProjectIndex } from '../src/project/project-index.js';
+
+function completionFixture(uri: string, markedLines: string[]) {
+  const markedSource = markedLines.join('\n');
+  const cursorOffset = markedSource.indexOf('|');
+  assert.notEqual(cursorOffset, -1);
+
+  const source = markedSource.replace('|', '');
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+  const parsed = parseSource(uri, source);
+
+  return {
+    source,
+    doc,
+    parsed,
+    position: doc.positionAt(cursorOffset),
+  };
+}
+
+function addResultStdlib(index: ProjectIndex): void {
+  index.upsert(
+    parseSource(
+      'file:///stdlib/std/collections/result.c3',
+      [
+        'module std::collections::result <OkType, ErrType>;',
+        'struct Result {}',
+        'fn Result err(ErrType err) { return {}; }',
+        '',
+      ].join('\n'),
+      { sourceKind: 'stdlib' },
+    ),
+  );
+}
+
+function applyCompletionTextEdit(
+  source: string,
+  doc: TextDocument,
+  item: CompletionItem,
+): string {
+  const edit = item.textEdit;
+  if (!edit || !('range' in edit)) {
+    throw new Error('completion item does not provide a text edit range');
+  }
+
+  const start = doc.offsetAt(edit.range.start);
+  const end = doc.offsetAt(edit.range.end);
+
+  return `${source.slice(0, start)}${edit.newText}${source.slice(end)}`;
+}
 
 test('completionItems returns keywords when document context is unavailable', () => {
   const items = completionItems(new ProjectIndex(), undefined, undefined, {
@@ -1047,6 +1096,234 @@ test('completionItems uses variable initializer context to infer generic call ar
   );
 });
 
+test('completionItems returns fields for an incomplete assignment struct literal', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const { doc, parsed, position } = completionFixture(uri, [
+    'module app;',
+    'struct Parse_Error',
+    '{',
+    '    int line;',
+    '    String message;',
+    '}',
+    'fn int main()',
+    '{',
+    '    Parse_Error err = {.|};',
+    '}',
+    '',
+  ]);
+
+  index.upsert(parsed);
+
+  const items = completionItems(index, doc, parsed, position);
+
+  assert.deepEqual(
+    items.map((item) => [item.label, item.kind, item.detail]),
+    [
+      ['.line', CompletionItemKind.Field, 'int line;'],
+      ['.message', CompletionItemKind.Field, 'String message;'],
+    ],
+  );
+});
+
+test('completionItems infers return generic argument fields in incomplete struct literal', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const { doc, parsed, position } = completionFixture(uri, [
+    'module app;',
+    'struct Parse_Error',
+    '{',
+    '    int line;',
+    '    String message;',
+    '}',
+    'fn Result{int, Parse_Error} parse_number(String s)',
+    '{',
+    '    return result::err({.|});',
+    '}',
+    '',
+  ]);
+
+  addResultStdlib(index);
+  index.upsert(parsed);
+
+  const items = completionItems(index, doc, parsed, position);
+
+  assert.deepEqual(
+    items.map((item) => [item.label, item.kind, item.detail]),
+    [
+      ['.line', CompletionItemKind.Field, 'int line;'],
+      ['.message', CompletionItemKind.Field, 'String message;'],
+    ],
+  );
+});
+
+test('completionItems infers variable generic argument fields in incomplete struct literal', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const { doc, parsed, position } = completionFixture(uri, [
+    'module app;',
+    'struct Parse_Error',
+    '{',
+    '    int line;',
+    '    String message;',
+    '}',
+    'fn int main(String[] args)',
+    '{',
+    '    Result{int, Parse_Error} x = result::err({.|});',
+    '}',
+    '',
+  ]);
+
+  addResultStdlib(index);
+  index.upsert(parsed);
+
+  const items = completionItems(index, doc, parsed, position);
+
+  assert.deepEqual(
+    items.map((item) => [item.label, item.kind, item.detail]),
+    [
+      ['.line', CompletionItemKind.Field, 'int line;'],
+      ['.message', CompletionItemKind.Field, 'String message;'],
+    ],
+  );
+});
+
+test('completionItems uses open document text for triggered incomplete struct literal', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const markedSource = [
+    'module app;',
+    'struct Parse_Error',
+    '{',
+    '    int line;',
+    '    String message;',
+    '}',
+    'fn int main(String[] args)',
+    '{',
+    '    Result{int, Parse_Error} x=result::err({.|});',
+    '}',
+    '',
+  ].join('\n');
+  const source = markedSource.replace('|', '');
+  const staleSource = source.replace('{.}', '{}');
+  const doc = TextDocument.create(uri, 'c3', 2, source);
+  const staleParsed = parseSource(uri, staleSource);
+
+  addResultStdlib(index);
+  index.upsert(staleParsed);
+
+  const items = completionItems(
+    index,
+    doc,
+    staleParsed,
+    doc.positionAt(markedSource.indexOf('|')),
+  );
+
+  assert.deepEqual(
+    items.map((item) => [item.label, item.kind, item.detail]),
+    [
+      ['.line', CompletionItemKind.Field, 'int line;'],
+      ['.message', CompletionItemKind.Field, 'String message;'],
+    ],
+  );
+});
+
+test('completionItems replaces an incomplete field prefix without duplicating text', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const { source, doc, parsed, position } = completionFixture(uri, [
+    'module app;',
+    'struct Parse_Error',
+    '{',
+    '    int line;',
+    '    String message;',
+    '}',
+    'fn int main(String[] args)',
+    '{',
+    '    Result{int, Parse_Error} x = result::err({.l|});',
+    '}',
+    '',
+  ]);
+
+  addResultStdlib(index);
+  index.upsert(parsed);
+
+  const items = completionItems(index, doc, parsed, position);
+  const line = items.find((item) => item.label === '.line');
+
+  assert.deepEqual(
+    items.map((item) => [item.label, item.kind, item.detail]),
+    [['.line', CompletionItemKind.Field, 'int line;']],
+  );
+  assert.ok(line);
+  assert.equal(
+    applyCompletionTextEdit(source, doc, line),
+    source.replace('result::err({.l});', 'result::err({.line});'),
+  );
+});
+
+test('completionItems returns semantic fields for manual completion in empty initializer', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const { doc, parsed, position } = completionFixture(uri, [
+    'module app;',
+    'struct Parse_Error',
+    '{',
+    '    int line;',
+    '    String message;',
+    '}',
+    'fn int main(String[] args)',
+    '{',
+    '    Result{int, Parse_Error} x = result::err({|});',
+    '}',
+    '',
+  ]);
+
+  addResultStdlib(index);
+  index.upsert(parsed);
+
+  const items = completionItems(index, doc, parsed, position);
+
+  assert.deepEqual(
+    items.map((item) => [item.label, item.kind, item.detail]),
+    [
+      ['.line', CompletionItemKind.Field, 'int line;'],
+      ['.message', CompletionItemKind.Field, 'String message;'],
+    ],
+  );
+});
+
+test('completionItems infers fields for any struct-typed call argument', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const { doc, parsed, position } = completionFixture(uri, [
+    'module app;',
+    'struct User',
+    '{',
+    '    String name;',
+    '    int age;',
+    '}',
+    'fn void save_user(User user) {}',
+    'fn void main()',
+    '{',
+    '    save_user({.|});',
+    '}',
+    '',
+  ]);
+
+  index.upsert(parsed);
+
+  const items = completionItems(index, doc, parsed, position);
+
+  assert.deepEqual(
+    items.map((item) => [item.label, item.kind, item.detail]),
+    [
+      ['.age', CompletionItemKind.Field, 'int age;'],
+      ['.name', CompletionItemKind.Field, 'String name;'],
+    ],
+  );
+});
+
 test('completionItems infers foreach by-reference variables for incomplete member access', () => {
   const index = new ProjectIndex();
   const uri = 'file:///workspace/app.c3';
@@ -1234,6 +1511,218 @@ test('completionItems returns imported module members after a module prefix', ()
   assert.deepEqual(
     items.map((item) => [item.label, item.kind, item.detail]),
     [['connect', CompletionItemKind.Function, 'void connect()']],
+  );
+});
+
+test('completionItems returns visible result module members after namespace qualifier', () => {
+  const index = new ProjectIndex();
+  const appUri = 'file:///workspace/app.c3';
+  const resultUri = 'file:///stdlib/std/collections/result.c3';
+  const appSource = [
+    'module app;',
+    'import std::collections::result;',
+    'struct Parse_Error {}',
+    'fn Result{int, Parse_Error} parse_number(String s)',
+    '{',
+    '    return result::;',
+    '}',
+    '',
+  ].join('\n');
+  const resultSource = [
+    'module std::collections::result <OkType, ErrType>;',
+    'struct Result {}',
+    'fn Result ok(OkType value) { return {}; }',
+    'fn Result err(ErrType err) { return {}; }',
+    'fn Result hidden() @private { return {}; }',
+    '',
+  ].join('\n');
+  const parsedApp = parseSource(appUri, appSource);
+  const doc = TextDocument.create(appUri, 'c3', 1, appSource);
+
+  index.upsert(parsedApp, false);
+  index.upsert(
+    parseSource(resultUri, resultSource, { sourceKind: 'stdlib' }),
+    false,
+  );
+  index.rebuild();
+
+  const items = completionItems(
+    index,
+    doc,
+    parsedApp,
+    doc.positionAt(appSource.indexOf('result::') + 'result::'.length),
+  );
+
+  assert.equal(
+    items.some(
+      (item) =>
+        item.label === 'ok' &&
+        item.kind === CompletionItemKind.Function &&
+        item.detail === 'Result ok(OkType value)',
+    ),
+    true,
+  );
+  assert.equal(
+    items.some(
+      (item) =>
+        item.label === 'err' &&
+        item.kind === CompletionItemKind.Function &&
+        item.detail === 'Result err(ErrType err)',
+    ),
+    true,
+  );
+  assert.equal(
+    items.some((item) => item.label === 'hidden'),
+    false,
+  );
+});
+
+test('completionItems returns stdlib string module members after namespace qualifier', () => {
+  const index = new ProjectIndex();
+  const appUri = 'file:///workspace/app.c3';
+  const stringUri = 'file:///stdlib/std/core/string.c3';
+  const appSource = [
+    'module app;',
+    'fn void main()',
+    '{',
+    '    string::;',
+    '}',
+    '',
+  ].join('\n');
+  const stringSource = [
+    'module std::core::string;',
+    'fn String tformat(String fmt, args...) @format(0) { return ""; }',
+    '',
+  ].join('\n');
+  const parsedApp = parseSource(appUri, appSource);
+  const doc = TextDocument.create(appUri, 'c3', 1, appSource);
+
+  index.upsert(parsedApp, false);
+  index.upsert(
+    parseSource(stringUri, stringSource, { sourceKind: 'stdlib' }),
+    false,
+  );
+  index.rebuild();
+
+  const items = completionItems(
+    index,
+    doc,
+    parsedApp,
+    doc.positionAt(appSource.indexOf('string::') + 'string::'.length),
+  );
+
+  assert.equal(
+    items.some(
+      (item) =>
+        item.label === 'tformat' &&
+        item.kind === CompletionItemKind.Function &&
+        item.detail === 'String tformat(String fmt, args...) @format(0)',
+    ),
+    true,
+  );
+});
+
+test('completionItems returns stdlib result module members after namespace qualifier', () => {
+  const index = new ProjectIndex();
+  const appUri = 'file:///workspace/app.c3';
+  const resultUri = 'file:///stdlib/std/collections/result.c3';
+  const appSource = [
+    'module app;',
+    'struct Parse_Error {}',
+    'fn Result{int, Parse_Error} parse_number(String s)',
+    '{',
+    '    return result::;',
+    '}',
+    '',
+  ].join('\n');
+  const resultSource = [
+    'module std::collections::result <OkType, ErrType>;',
+    'struct Result {}',
+    'fn Result ok(OkType value) { return {}; }',
+    'fn Result err(ErrType err) { return {}; }',
+    'fn Result hidden() @private { return {}; }',
+    '',
+  ].join('\n');
+  const parsedApp = parseSource(appUri, appSource);
+  const doc = TextDocument.create(appUri, 'c3', 1, appSource);
+
+  index.upsert(parsedApp, false);
+  index.upsert(
+    parseSource(resultUri, resultSource, { sourceKind: 'stdlib' }),
+    false,
+  );
+  index.rebuild();
+
+  const items = completionItems(
+    index,
+    doc,
+    parsedApp,
+    doc.positionAt(appSource.indexOf('result::') + 'result::'.length),
+  );
+
+  assert.equal(
+    items.some(
+      (item) =>
+        item.label === 'ok' &&
+        item.kind === CompletionItemKind.Function &&
+        item.detail === 'Result ok(OkType value)',
+    ),
+    true,
+  );
+  assert.equal(
+    items.some(
+      (item) =>
+        item.label === 'err' &&
+        item.kind === CompletionItemKind.Function &&
+        item.detail === 'Result err(ErrType err)',
+    ),
+    true,
+  );
+  assert.equal(
+    items.some((item) => item.label === 'hidden'),
+    false,
+  );
+});
+
+test('completionItems suggests stdlib module names in expression position', () => {
+  const index = new ProjectIndex();
+  const appUri = 'file:///workspace/app.c3';
+  const stringUri = 'file:///stdlib/std/core/string.c3';
+  const appSource = [
+    'module app;',
+    'fn void main()',
+    '{',
+    '    stri;',
+    '}',
+    '',
+  ].join('\n');
+  const parsedApp = parseSource(appUri, appSource);
+  const doc = TextDocument.create(appUri, 'c3', 1, appSource);
+
+  index.upsert(parsedApp, false);
+  index.upsert(
+    parseSource(stringUri, 'module std::core::string;\n', {
+      sourceKind: 'stdlib',
+    }),
+    false,
+  );
+  index.rebuild();
+
+  const items = completionItems(
+    index,
+    doc,
+    parsedApp,
+    doc.positionAt(appSource.indexOf('stri') + 'stri'.length),
+  );
+
+  assert.equal(
+    items.some(
+      (item) =>
+        item.label === 'string' &&
+        item.kind === CompletionItemKind.Module &&
+        item.detail === 'module std::core::string',
+    ),
+    true,
   );
 });
 

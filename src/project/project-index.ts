@@ -35,6 +35,12 @@ export type ProjectIndexOptions = {
   activeEnvironment?: Iterable<string>;
 };
 
+export type ModuleCompletionCandidate = {
+  label: string;
+  moduleName: string;
+  sortText: string;
+};
+
 export class ProjectIndex {
   private readonly parsedByUri = new Map<string, ParsedDocument>();
   private readonly modulesByName = new Map<string, ModuleIndex>();
@@ -139,6 +145,93 @@ export class ProjectIndex {
       ...findScopedSymbolsAt(current.scopedSymbols, position),
       ...this.visibleSymbols(current),
     ];
+  }
+
+  moduleCompletionCandidates(
+    current: ParsedDocument,
+    prefix = '',
+  ): ModuleCompletionCandidate[] {
+    const currentModule = this.modulesByName.get(current.moduleName);
+    const candidates = new Map<
+      string,
+      ModuleCompletionCandidate & { rank: number }
+    >();
+
+    const add = (label: string, moduleName: string, rank: number): void => {
+      if (!label || (prefix && !label.startsWith(prefix))) return;
+
+      const existing = candidates.get(label);
+      if (
+        existing &&
+        (existing.rank < rank ||
+          (existing.rank === rank &&
+            existing.moduleName.localeCompare(moduleName) <= 0))
+      ) {
+        return;
+      }
+
+      candidates.set(label, {
+        label,
+        moduleName,
+        rank,
+        sortText: moduleCompletionSortText(label, rank),
+      });
+    };
+
+    if (currentModule) {
+      for (const [alias, target] of currentModule.moduleAliases) {
+        const targetModule = this.resolveImportedModule(current, target);
+        if (targetModule) add(alias, targetModule.name, 0);
+      }
+
+      for (const imp of currentModule.imports) {
+        const importedModule = this.resolveImportedModule(current, imp);
+        if (!importedModule) continue;
+
+        add(importPathLabel(imp), importedModule.name, 0);
+      }
+
+      for (const childModule of this.directChildModules(currentModule.name)) {
+        add(
+          moduleChildLabel(currentModule.name, childModule.name),
+          childModule.name,
+          1,
+        );
+      }
+    }
+
+    for (const importedModule of this.explicitImportedModules(current)) {
+      for (const childModule of this.directChildModules(importedModule.name)) {
+        add(
+          moduleChildLabel(importedModule.name, childModule.name),
+          childModule.name,
+          1,
+        );
+      }
+    }
+
+    for (const childModule of this.directChildModules('std::core')) {
+      add(moduleChildLabel('std::core', childModule.name), childModule.name, 1);
+    }
+
+    if (prefix.length > 0) {
+      for (const candidate of this.stdlibModuleAliasCandidates()) {
+        add(candidate.label, candidate.moduleName, 3);
+      }
+    }
+
+    for (const moduleName of this.modulesByName.keys()) {
+      const rootName = moduleName.split('::')[0];
+      add(rootName, rootName, moduleName === rootName ? 2 : 4);
+    }
+
+    return [...candidates.values()]
+      .sort(compareModuleCompletionCandidates)
+      .map(({ label, moduleName, sortText }) => ({
+        label,
+        moduleName,
+        sortText,
+      }));
   }
 
   memberSymbolsForReceiver(
@@ -476,6 +569,15 @@ export class ProjectIndex {
     return resolvedName ? this.modulesByName.get(resolvedName) : undefined;
   }
 
+  moduleMemberSymbols(current: ParsedDocument, prefix: string): C3Symbol[] {
+    return uniqueSymbolsByCanonicalModuleKey(
+      modulePathAddressableModuleSymbols(
+        this.resolveModuleFromPrefix(current, prefix),
+        current.moduleName,
+      ),
+    ).sort(compareSymbols);
+  }
+
   private moduleSymbolForPrefix(
     current: ParsedDocument,
     prefix: string,
@@ -690,7 +792,84 @@ export class ProjectIndex {
     const relative = this.modulesByName.get(`${current.moduleName}::${prefix}`);
     if (relative) return relative.name;
 
+    const stdlibAlias = this.stdlibModuleNameForAlias(prefix);
+    if (stdlibAlias) return stdlibAlias;
+
     return undefined;
+  }
+
+  private stdlibModuleNameForAlias(alias: string): string | undefined {
+    if (!alias) return undefined;
+
+    const candidates = this.stdlibModuleNamesForAlias(alias);
+    const implicitCore = `std::core::${alias}`;
+
+    if (candidates.includes(implicitCore)) return implicitCore;
+    if (candidates.length === 1) return candidates[0];
+
+    return undefined;
+  }
+
+  private stdlibModuleAliasCandidates(): Array<{
+    label: string;
+    moduleName: string;
+  }> {
+    const aliases = new Map<string, string[]>();
+
+    for (const mod of this.modulesByName.values()) {
+      if (!this.isStdlibModule(mod)) continue;
+
+      const label = mod.name.split('::').at(-1);
+      if (!label) continue;
+
+      const modules = aliases.get(label) ?? [];
+      modules.push(mod.name);
+      aliases.set(label, modules);
+    }
+
+    const candidates: Array<{ label: string; moduleName: string }> = [];
+
+    for (const [label, modules] of aliases) {
+      const uniqueModules = [...new Set(modules)].sort((a, b) =>
+        a.localeCompare(b),
+      );
+      const implicitCore = `std::core::${label}`;
+      const selected =
+        uniqueModules.length === 1
+          ? uniqueModules[0]
+          : uniqueModules.includes(implicitCore)
+            ? implicitCore
+            : undefined;
+
+      if (selected) candidates.push({ label, moduleName: selected });
+    }
+
+    return candidates.sort(
+      (a, b) =>
+        a.label.localeCompare(b.label) ||
+        a.moduleName.localeCompare(b.moduleName),
+    );
+  }
+
+  private stdlibModuleNamesForAlias(alias: string): string[] {
+    const suffix = `::${alias}`;
+
+    return [...this.modulesByName.values()]
+      .filter(
+        (mod) =>
+          this.isStdlibModule(mod) &&
+          (mod.name === alias ||
+            mod.name === `std::${alias}` ||
+            mod.name.endsWith(suffix)),
+      )
+      .map((mod) => mod.name)
+      .sort((a, b) => a.localeCompare(b));
+  }
+
+  private isStdlibModule(mod: ModuleIndex): boolean {
+    return mod.files.some(
+      (uri) => this.parsedByUri.get(uri)?.sourceKind === 'stdlib',
+    );
   }
 
   private resolveQualifiedSymbol(
@@ -774,7 +953,19 @@ export class ProjectIndex {
       );
     }
 
-    // 5. 尝试当前模块的相对路径解析
+    // 5. Match implicit stdlib module aliases such as result::err.
+    const stdlibAlias = this.stdlibModuleNameForAlias(modulePrefix);
+    if (stdlibAlias) {
+      return uniqueSymbolsByCanonicalModuleKey(
+        modulePathAddressableSymbols(
+          this.modulesByName.get(stdlibAlias),
+          symbolName,
+          current.moduleName,
+        ),
+      );
+    }
+
+    // 6. 尝试当前模块的相对路径解析
     const relativeModuleName = `${current.moduleName}::${modulePrefix}`;
     const relativeModule = this.modulesByName.get(relativeModuleName);
     return uniqueSymbolsByCanonicalModuleKey(
@@ -1768,6 +1959,19 @@ function modulePathAddressableSymbols(
   );
 }
 
+function modulePathAddressableModuleSymbols(
+  mod: ModuleIndex | undefined,
+  requesterModuleName: string,
+): C3Symbol[] {
+  return [...(mod?.symbols.values() ?? [])]
+    .flat()
+    .filter(
+      (symbol) =>
+        symbol.kind !== SymbolKind.Method &&
+        isVisibleFrom(symbol, requesterModuleName),
+    );
+}
+
 function moduleSignature(
   moduleName: string,
   genericParams: readonly string[],
@@ -1984,6 +2188,32 @@ function compareModulePathCandidates(
   return (
     a.label.localeCompare(b.label) || a.moduleName.localeCompare(b.moduleName)
   );
+}
+
+function compareModuleCompletionCandidates(
+  a: ModuleCompletionCandidate & { rank: number },
+  b: ModuleCompletionCandidate & { rank: number },
+): number {
+  return (
+    a.rank - b.rank ||
+    a.label.localeCompare(b.label) ||
+    a.moduleName.localeCompare(b.moduleName)
+  );
+}
+
+function moduleCompletionSortText(label: string, rank: number): string {
+  return rank < 3 ? `!${rank}-${label}` : `~${rank}-${label}`;
+}
+
+function importPathLabel(importPath: string): string {
+  return importPath.split('::').at(-1) ?? importPath;
+}
+
+function moduleChildLabel(
+  parentModuleName: string,
+  moduleName: string,
+): string {
+  return moduleName.slice(parentModuleName.length + 2).split('::')[0] ?? '';
 }
 
 function compareAutoImportCandidates(

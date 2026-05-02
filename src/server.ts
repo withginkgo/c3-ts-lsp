@@ -81,6 +81,7 @@ const pendingSemanticDiagnosticUris = new Set<string>();
 
 const semanticDiagnosticsDebounceMs = 120;
 const compilerDiagnosticsDebounceMs = 500;
+const debugCompletionRequests = process.env.C3_LSP_DEBUG_COMPLETIONS === '1';
 type DiagnosticPublishMode = 'document' | 'syntax' | 'workspace' | 'none';
 
 connection.onInitialize((params: InitializeParams): InitializeResult => {
@@ -325,6 +326,14 @@ connection.onDocumentFormatting((params) => {
 connection.onCompletion((params) => {
   const doc = documents.get(params.textDocument.uri);
   const current = projectIndex.getParsed(params.textDocument.uri);
+
+  if (debugCompletionRequests) {
+    connection.console.log(
+      `completion request ${params.textDocument.uri}:${params.position.line}:${params.position.character} ` +
+        `triggerKind=${params.context?.triggerKind ?? 'none'} ` +
+        `triggerCharacter=${JSON.stringify(params.context?.triggerCharacter ?? null)}`,
+    );
+  }
 
   return completionItems(projectIndex, doc, current, params.position);
 });

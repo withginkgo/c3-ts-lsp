@@ -1,5 +1,8 @@
-import type { Position, Range } from 'vscode-languageserver/node.js';
+import type { SyntaxNode } from 'tree-sitter';
+import { Range, type Position } from 'vscode-languageserver/node.js';
 import type { TextDocument } from 'vscode-languageserver-textdocument';
+
+import type { ParsedDocument } from '../shared/types.js';
 
 const C3_IDENTIFIER_PATTERN = '[A-Za-z_$@][A-Za-z0-9_$@]*';
 const C3_QUALIFIED_IDENTIFIER_PATTERN = `${C3_IDENTIFIER_PATTERN}(?:::${C3_IDENTIFIER_PATTERN})*`;
@@ -37,6 +40,12 @@ export type StructInitializerFieldCompletionContext = {
 
 export type IdentifierCompletionContext = {
   prefix: string;
+  replaceRange: Range;
+};
+
+export type ModuleNamespaceCompletionContext = {
+  prefix: string;
+  memberPrefix: string;
   replaceRange: Range;
 };
 
@@ -113,24 +122,36 @@ export function structInitializerFieldBeforeCursor(
 ): StructInitializerFieldCompletionContext | null {
   const text = doc.getText();
   const offset = doc.offsetAt(position);
-  const before = text.slice(0, offset);
-  const fieldMatch = before.match(
-    /(^|[^A-Za-z0-9_$@])\.\s*([A-Za-z_$@][A-Za-z0-9_$@]*)?$/,
-  );
-
-  if (!fieldMatch) return null;
-
-  const prefix = fieldMatch[2] ?? '';
   const braceOffset = unclosedBraceBefore(text, offset);
   if (braceOffset == null) return null;
-  const dotOffset = before.lastIndexOf('.');
-  if (dotOffset < 0) return null;
+
+  const entryStart = initializerEntryStart(text, braceOffset, offset);
+  const entryText = text.slice(entryStart, offset);
+  const fieldMatch = entryText.match(
+    /^\s*\.\s*([A-Za-z_$@][A-Za-z0-9_$@]*)?$/,
+  );
+
+  if (fieldMatch) {
+    const prefix = fieldMatch[1] ?? '';
+    const dotOffset = entryStart + entryText.indexOf('.');
+
+    return {
+      typeName: initializerTypeBeforeBrace(text, braceOffset) ?? undefined,
+      prefix,
+      replaceRange: {
+        start: doc.positionAt(dotOffset),
+        end: position,
+      },
+    };
+  }
+
+  if (!/^\s*$/.test(entryText)) return null;
 
   return {
     typeName: initializerTypeBeforeBrace(text, braceOffset) ?? undefined,
-    prefix,
+    prefix: '',
     replaceRange: {
-      start: doc.positionAt(dotOffset),
+      start: position,
       end: position,
     },
   };
@@ -168,19 +189,37 @@ export function dotAccessCompletionBeforeCursor(
   return /\.\s*[A-Za-z_$@]*$/.test(before);
 }
 
-export function modulePrefixBeforeCursor(
-  doc: TextDocument,
+export function moduleNamespaceCompletionBeforeCursor(
+  parsed: ParsedDocument,
   position: Position,
-): string | null {
-  const text = doc.getText();
-  const offset = doc.offsetAt(position);
-  const before = text.slice(0, offset);
+): ModuleNamespaceCompletionContext | null {
+  const root = parsed.tree.rootNode;
+  const separator = namespaceSeparatorEndingAt(root, position);
 
-  const match = before.match(
-    /([A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*)::$/,
-  );
+  if (separator) {
+    const prefix =
+      moduleResolutionPrefix(separator, position) ??
+      referenceTextEndingAt(root, separator.startPosition);
+    if (!prefix) return null;
 
-  return match?.[1] ?? null;
+    return {
+      prefix,
+      memberPrefix: '',
+      replaceRange: Range.create(position, position),
+    };
+  }
+
+  const identifier = identifierEndingAt(root, position);
+  if (!identifier) return null;
+
+  const context = qualifiedIdentifierContext(identifier);
+  if (!context) return null;
+
+  return {
+    prefix: context.prefix,
+    memberPrefix: identifier.text,
+    replaceRange: rangeFromNode(identifier),
+  };
 }
 
 export function modulePathCompletionBeforeCursor(
@@ -321,6 +360,301 @@ function modulePathStartInLine(line: string): number | null {
   }
 
   return null;
+}
+
+function namespaceSeparatorEndingAt(
+  root: SyntaxNode,
+  position: Position,
+): SyntaxNode | null {
+  if (position.character === 0) return null;
+
+  const node = root.descendantForPosition({
+    row: position.line,
+    column: position.character - 1,
+  });
+
+  return node.type === '::' && sameNodeEndPosition(node, position)
+    ? node
+    : null;
+}
+
+function moduleResolutionPrefix(
+  separator: SyntaxNode,
+  position: Position,
+): string | null {
+  const parent = separator.parent;
+
+  if (
+    parent?.type !== 'module_resolution' ||
+    !sameNodeEndPosition(parent, position) ||
+    !parent.text.endsWith('::')
+  ) {
+    return null;
+  }
+
+  return validModulePath(parent.text.slice(0, -2));
+}
+
+function referenceTextEndingAt(
+  root: SyntaxNode,
+  position: SyntaxNode['endPosition'],
+): string | null {
+  let prefix: string | null = null;
+
+  function visit(node: SyntaxNode): void {
+    if (compareNodeEndPosition(node, position) < 0) return;
+    if (compareNodeStartPosition(node, position) > 0) return;
+
+    if (sameNodePosition(node.endPosition, position)) {
+      const candidate = validModulePath(node.text);
+      if (candidate && candidate.length > (prefix?.length ?? 0)) {
+        prefix = candidate;
+      }
+    }
+
+    for (const child of node.namedChildren) {
+      visit(child);
+    }
+  }
+
+  visit(root);
+  return prefix;
+}
+
+function identifierEndingAt(
+  root: SyntaxNode,
+  position: Position,
+): SyntaxNode | null {
+  if (position.character === 0) return null;
+
+  const node = root.descendantForPosition({
+    row: position.line,
+    column: position.character - 1,
+  });
+
+  return isIdentifierNode(node) && sameNodeEndPosition(node, position)
+    ? node
+    : null;
+}
+
+function qualifiedIdentifierContext(
+  identifier: SyntaxNode,
+): { prefix: string } | null {
+  const owner = nearestQualifiedIdentifierOwner(identifier);
+  if (!owner) return null;
+
+  const finalIdentifier = owner.namedChildren.at(-1);
+  if (!finalIdentifier || !sameSyntaxNode(finalIdentifier, identifier)) {
+    return null;
+  }
+
+  const prefixParts = owner.namedChildren.flatMap((child) => {
+    if (child.type !== 'module_resolution') return [];
+
+    const ident = child.namedChildren.find(isIdentifierNode);
+    return ident ? [ident.text] : [];
+  });
+
+  if (prefixParts.length === 0) return null;
+
+  return { prefix: prefixParts.join('::') };
+}
+
+function nearestQualifiedIdentifierOwner(node: SyntaxNode): SyntaxNode | null {
+  let current: SyntaxNode | null = node.parent;
+
+  while (current) {
+    if (
+      (current.type === 'ident_expr' ||
+        current.type === 'path_ident' ||
+        current.type === 'path_type_ident') &&
+      current.namedChildren.some((child) => child.type === 'module_resolution')
+    ) {
+      return current;
+    }
+
+    current = current.parent;
+  }
+
+  return null;
+}
+
+function validModulePath(text: string): string | null {
+  return new RegExp(`^${C3_QUALIFIED_IDENTIFIER_PATTERN}$`).test(text)
+    ? text
+    : null;
+}
+
+function isIdentifierNode(node: SyntaxNode): boolean {
+  return (
+    node.type === 'ident' ||
+    node.type === 'type_ident' ||
+    node.type === 'const_ident' ||
+    node.type === 'at_ident' ||
+    node.type === 'at_type_ident' ||
+    node.type === 'ct_ident' ||
+    node.type === 'ct_type_ident' ||
+    node.type === 'ct_const_ident'
+  );
+}
+
+function rangeFromNode(node: SyntaxNode): Range {
+  return Range.create(
+    node.startPosition.row,
+    node.startPosition.column,
+    node.endPosition.row,
+    node.endPosition.column,
+  );
+}
+
+function sameNodeEndPosition(node: SyntaxNode, position: Position): boolean {
+  return (
+    node.endPosition.row === position.line &&
+    node.endPosition.column === position.character
+  );
+}
+
+function sameSyntaxNode(a: SyntaxNode, b: SyntaxNode): boolean {
+  return (
+    a.type === b.type &&
+    sameNodePosition(a.startPosition, b.startPosition) &&
+    sameNodePosition(a.endPosition, b.endPosition)
+  );
+}
+
+function sameNodePosition(
+  a: SyntaxNode['startPosition'],
+  b: SyntaxNode['startPosition'],
+): boolean {
+  return a.row === b.row && a.column === b.column;
+}
+
+function compareNodeStartPosition(
+  node: SyntaxNode,
+  position: SyntaxNode['startPosition'],
+): number {
+  return compareNodePositions(node.startPosition, position);
+}
+
+function compareNodeEndPosition(
+  node: SyntaxNode,
+  position: SyntaxNode['endPosition'],
+): number {
+  return compareNodePositions(node.endPosition, position);
+}
+
+function compareNodePositions(
+  a: SyntaxNode['startPosition'],
+  b: SyntaxNode['startPosition'],
+): number {
+  if (a.row !== b.row) return a.row - b.row;
+  return a.column - b.column;
+}
+
+function initializerEntryStart(
+  text: string,
+  braceOffset: number,
+  offset: number,
+): number {
+  let entryStart = braceOffset + 1;
+  let parenDepth = 0;
+  let bracketDepth = 0;
+  let braceDepth = 0;
+  let quote: string | undefined;
+  let escaped = false;
+  let lineComment = false;
+  let blockComment = false;
+
+  for (let index = braceOffset + 1; index < offset; index++) {
+    const char = text[index];
+    const next = text[index + 1];
+
+    if (lineComment) {
+      if (char === '\n') lineComment = false;
+      continue;
+    }
+
+    if (blockComment) {
+      if (char === '*' && next === '/') {
+        blockComment = false;
+        index++;
+      }
+      continue;
+    }
+
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+
+      if (quote !== '`' && char === '\\') {
+        escaped = true;
+        continue;
+      }
+
+      if (char === quote) quote = undefined;
+      continue;
+    }
+
+    if (char === '/' && next === '/') {
+      lineComment = true;
+      index++;
+      continue;
+    }
+
+    if (char === '/' && next === '*') {
+      blockComment = true;
+      index++;
+      continue;
+    }
+
+    if (char === '"' || char === "'" || char === '`') {
+      quote = char;
+      continue;
+    }
+
+    if (char === '(') {
+      parenDepth++;
+      continue;
+    }
+
+    if (char === ')') {
+      parenDepth = Math.max(0, parenDepth - 1);
+      continue;
+    }
+
+    if (char === '[') {
+      bracketDepth++;
+      continue;
+    }
+
+    if (char === ']') {
+      bracketDepth = Math.max(0, bracketDepth - 1);
+      continue;
+    }
+
+    if (char === '{') {
+      braceDepth++;
+      continue;
+    }
+
+    if (char === '}') {
+      braceDepth = Math.max(0, braceDepth - 1);
+      continue;
+    }
+
+    if (
+      char === ',' &&
+      parenDepth === 0 &&
+      bracketDepth === 0 &&
+      braceDepth === 0
+    ) {
+      entryStart = index + 1;
+    }
+  }
+
+  return entryStart;
 }
 
 function unclosedBraceBefore(text: string, offset: number): number | null {

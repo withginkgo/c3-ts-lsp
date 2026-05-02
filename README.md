@@ -139,9 +139,9 @@ through LSP initialization options:
 The server also accepts `stdlibPaths`, `standardLibraryPath`,
 `standardLibraryPaths`, `c3StdlibPath`, `c3StdlibPaths`, `stdlib-path`,
 `c3.stdlib-path`, `c3.stdlibPath`, and `c3.standardLibraryPath`. Environment
-variables `C3_STDLIB_PATH`, `C3_STDLIB_ROOT`, and `C3_STANDARD_LIBRARY_PATH`
-are also supported. Multiple paths can be separated with the platform path
-delimiter.
+variables `C3_STDLIB_PATH`, `C3_STDLIB_ROOT`, `C3_STANDARD_LIBRARY_PATH`, and
+`C3C_LIB` are also supported. Multiple paths can be separated with the platform
+path delimiter.
 
 ### VSCode extension integration
 
