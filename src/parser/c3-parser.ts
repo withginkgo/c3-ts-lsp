@@ -1412,18 +1412,29 @@ function recoverCallableSymbol(
     moduleGenericParams,
     declaredGenericParams,
   );
+  const parameterDetails = parameterTexts.map((parameter, index) =>
+    parameterDetailFromLabel(parameter, index, receiverType),
+  );
+  const returnType =
+    beforeParams.slice(0, -fullName.length).trim() || undefined;
 
   return {
     name,
     moduleName,
     kind: receiverType ? SymbolKind.Method : SymbolKind.Function,
+    symbolType: receiverType ? 'method' : 'function',
     uri: doc.uri,
     range: rangeFromOffsets(doc, startIndex, endIndex),
     selectionRange: rangeFromOffsets(doc, nameStart, nameStart + name.length),
     signature: compactText(header),
     documentation: undefined,
     attributes: attributesFromText(header),
-    returnType: beforeParams.slice(0, -fullName.length).trim() || undefined,
+    returnType,
+    functionType: {
+      params: parameterDetails,
+      returnType,
+      receiverType,
+    },
     receiverType,
     implementedInterfaces: [],
     parameters: parameterTexts,
@@ -1431,9 +1442,7 @@ function recoverCallableSymbol(
     moduleGenericParams,
     declaredGenericParams,
     effectiveGenericParams,
-    parameterDetails: parameterTexts.map((parameter, index) =>
-      parameterDetailFromLabel(parameter, index, receiverType),
-    ),
+    parameterDetails,
     children: recoveredParameterSymbols(
       doc,
       source,
@@ -1477,6 +1486,7 @@ function recoveredParameterSymbols(
       name: info.name,
       moduleName,
       kind: SymbolKind.Variable,
+      symbolType: 'variable',
       uri: doc.uri,
       range: rangeFromOffsets(doc, rangeStart, rangeStart + parameter.length),
       selectionRange: rangeFromOffsets(
@@ -1488,6 +1498,7 @@ function recoveredParameterSymbols(
       documentation: undefined,
       attributes: [],
       returnType: info.type,
+      valueType: info.type,
       implementedInterfaces: [],
       parameters: [],
       children: [],
@@ -1570,6 +1581,7 @@ function createSymbol(
     documentation?: string;
     attributes?: string[];
     returnType?: string;
+    valueType?: string;
     receiverType?: string;
     implementedInterfaces?: string[];
     parameters?: string[];
@@ -1585,10 +1597,19 @@ function createSymbol(
     scopeRange?: Range;
   },
 ): C3Symbol {
+  const symbolType = semanticSymbolTypeFor(options.kind ?? kind, options);
+  const parameterDetails =
+    options.parameterDetails ??
+    options.parameters?.map((parameter, index) =>
+      parameterDetailFromLabel(parameter, index, options.receiverType),
+    ) ??
+    [];
+
   return {
     name: nameNode.text,
     moduleName,
     kind: options.kind ?? kind,
+    symbolType,
     uri: doc.uri,
     range: rangeFromNode(node),
     selectionRange: rangeFromNode(nameNode),
@@ -1597,6 +1618,8 @@ function createSymbol(
     documentation: options.documentation ?? documentationFor(node),
     attributes: options.attributes ?? attributesFor(node),
     returnType: options.returnType,
+    valueType: options.valueType ?? valueTypeFor(symbolType, options),
+    functionType: functionTypeFor(symbolType, parameterDetails, options),
     receiverType: options.receiverType,
     implementedInterfaces: options.implementedInterfaces,
     parameters: options.parameters ?? [],
@@ -1611,6 +1634,57 @@ function createSymbol(
     typeInfo: options.typeInfo,
     scopeRange: options.scopeRange,
     children: options.children ?? [],
+  };
+}
+
+function semanticSymbolTypeFor(
+  kind: SymbolKind,
+  options: {
+    typeInfo?: C3TypeDeclarationInfo;
+    receiverType?: string;
+    signature: string;
+  },
+): C3Symbol['symbolType'] {
+  if (kind === SymbolKind.Module) return 'module';
+  if (kind === SymbolKind.Function) return 'function';
+  if (kind === SymbolKind.Method) return 'method';
+  if (kind === SymbolKind.Struct) return 'struct';
+  if (kind === SymbolKind.Enum) return 'enum';
+  if (kind === SymbolKind.Interface) return 'interface';
+  if (kind === SymbolKind.Variable) return 'variable';
+  if (kind === SymbolKind.Field) return 'field';
+  if (kind === SymbolKind.Constant) return 'constant';
+  if (kind === SymbolKind.Property) return 'property';
+  if (kind === SymbolKind.TypeParameter) return 'type';
+
+  if (options.typeInfo) return 'type';
+  if (options.receiverType) return 'method';
+
+  return 'unknown';
+}
+
+function valueTypeFor(
+  symbolType: C3Symbol['symbolType'],
+  options: { returnType?: string },
+): string | undefined {
+  return symbolType === 'variable' ||
+    symbolType === 'field' ||
+    symbolType === 'constant'
+    ? options.returnType
+    : undefined;
+}
+
+function functionTypeFor(
+  symbolType: C3Symbol['symbolType'],
+  params: C3Parameter[],
+  options: { returnType?: string; receiverType?: string },
+): C3Symbol['functionType'] {
+  if (symbolType !== 'function' && symbolType !== 'method') return undefined;
+
+  return {
+    params,
+    returnType: options.returnType,
+    receiverType: options.receiverType,
   };
 }
 

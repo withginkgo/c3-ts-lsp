@@ -19,7 +19,7 @@ import { semanticDiagnostics } from './analysis/diagnostics.js';
 import { codeActions } from './lsp/code-actions.js';
 import { completionItems } from './lsp/completions.js';
 import { contractDefinition, contractHover } from './lsp/contracts.js';
-import { wordAtPosition } from './lsp/document-refs.js';
+import { referenceAtPosition, wordAtPosition } from './lsp/document-refs.js';
 import { documentSymbols } from './lsp/document-symbols.js';
 import { hoverFromResolveResult } from './lsp/hover.js';
 import { inlayHints } from './lsp/inlay-hints.js';
@@ -205,16 +205,20 @@ connection.onHover((params): Hover | null => {
   const contract = contractHover(projectIndex, doc, current, params.position);
   if (contract) return contract;
 
-  const word = wordAtPosition(doc, params.position);
-  if (!word) return null;
+  const ref = referenceAtPosition(doc, params.position);
+  if (!ref) return null;
 
-  const result = projectIndex.resolveSymbol(
+  const result = projectIndex.resolveSymbolAtReferenceSegment(
     params.textDocument.uri,
-    word,
+    ref.text,
+    ref.segmentIndex,
     params.position,
   );
 
-  return hoverFromResolveResult(projectIndex, result);
+  return hoverFromResolveResult(projectIndex, result, {
+    currentUri: params.textDocument.uri,
+    position: params.position,
+  });
 });
 
 connection.onDefinition((params): Location | Location[] | null => {

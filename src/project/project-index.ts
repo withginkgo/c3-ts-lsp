@@ -334,6 +334,26 @@ export class ProjectIndex {
     return this.resultFromCandidates(builtin ? [builtin] : []);
   }
 
+  resolveSymbolAtReferenceSegment(
+    currentUri: string,
+    ref: string,
+    segmentIndex: number,
+    position: Position,
+  ): ResolveResult {
+    const current = this.parsedByUri.get(currentUri);
+    if (!current) return { candidates: [], reason: 'not_found' };
+
+    const parts = ref.split('::');
+    if (parts.length < 2 || segmentIndex >= parts.length - 1) {
+      return this.resolveSymbol(currentUri, ref, position);
+    }
+
+    const prefix = parts.slice(0, segmentIndex + 1).join('::');
+    const moduleSymbol = this.moduleSymbolForPrefix(current, prefix, position);
+
+    return this.resultFromCandidates(moduleSymbol ? [moduleSymbol] : []);
+  }
+
   resolveCallableSymbol(
     currentUri: string,
     ref: string,
@@ -371,6 +391,10 @@ export class ProjectIndex {
   }
 
   typeSymbolFor(symbol: C3Symbol): C3Symbol | undefined {
+    if (symbol.kind === SymbolKind.Module || isCallableSymbol(symbol)) {
+      return undefined;
+    }
+
     if (isTypeSymbol(symbol)) return symbol;
     if (!symbol.returnType) return undefined;
 
@@ -450,6 +474,78 @@ export class ProjectIndex {
   ): ModuleIndex | undefined {
     const resolvedName = this.resolveModuleNameFromPrefix(current, prefix);
     return resolvedName ? this.modulesByName.get(resolvedName) : undefined;
+  }
+
+  private moduleSymbolForPrefix(
+    current: ParsedDocument,
+    prefix: string,
+    position: Position,
+  ): C3Symbol | undefined {
+    const resolvedName =
+      this.resolveModuleNameFromPrefix(current, prefix) ??
+      this.existingModulePrefixName(current, prefix);
+    if (!resolvedName) return undefined;
+
+    const mod = this.modulesByName.get(resolvedName);
+    const parsed = mod?.files[0] ? this.parsedByUri.get(mod.files[0]) : current;
+    const moduleDecl = parsed
+      ? parsed.tree.rootNode.namedChildren.find(
+          (child) => child.type === 'module_declaration',
+        )
+      : undefined;
+    const path = moduleDecl?.childForFieldName('path') ?? moduleDecl;
+    const genericParams = mod?.genericParams ?? [];
+
+    return {
+      name: prefix.split('::').at(-1) ?? prefix,
+      moduleName: resolvedName,
+      kind: SymbolKind.Module,
+      symbolType: 'module',
+      uri: parsed?.uri ?? current.uri,
+      range: moduleDecl
+        ? rangeFromNode(moduleDecl)
+        : Range.create(position, position),
+      selectionRange: path
+        ? rangeFromNode(path)
+        : Range.create(position, position),
+      signature: moduleSignature(resolvedName, genericParams),
+      documentation: undefined,
+      attributes: [],
+      implementedInterfaces: [],
+      parameters: [],
+      moduleGenericParams: genericParams,
+      moduleInfo: {
+        canonicalName: resolvedName,
+        genericParams,
+        alias: prefix === resolvedName ? undefined : prefix,
+      },
+      children: [],
+    };
+  }
+
+  private existingModulePrefixName(
+    current: ParsedDocument,
+    prefix: string,
+  ): string | undefined {
+    const candidates = [
+      prefix,
+      current.moduleName ? `${current.moduleName}::${prefix}` : '',
+    ].filter(Boolean);
+
+    for (const candidate of candidates) {
+      if (this.modulesByName.has(candidate)) return candidate;
+
+      const childPrefix = `${candidate}::`;
+      if (
+        [...this.modulesByName.keys()].some((name) =>
+          name.startsWith(childPrefix),
+        )
+      ) {
+        return candidate;
+      }
+    }
+
+    return undefined;
   }
 
   moduleChildNamesForPrefix(current: ParsedDocument, prefix: string): string[] {
@@ -1670,6 +1766,16 @@ function modulePathAddressableSymbols(
       symbol.kind !== SymbolKind.Method &&
       isVisibleFrom(symbol, requesterModuleName),
   );
+}
+
+function moduleSignature(
+  moduleName: string,
+  genericParams: readonly string[],
+): string {
+  const suffix =
+    genericParams.length > 0 ? ` <${genericParams.join(', ')}>` : '';
+
+  return `module ${moduleName}${suffix}`;
 }
 
 function isVisibleFrom(symbol: C3Symbol, moduleName: string): boolean {

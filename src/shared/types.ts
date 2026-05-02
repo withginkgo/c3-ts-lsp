@@ -9,6 +9,7 @@ export type C3Symbol = {
   name: string;
   moduleName: string;
   kind: SymbolKind;
+  symbolType?: C3SymbolType;
   uri: string;
   range: Range;
   selectionRange: Range;
@@ -17,6 +18,9 @@ export type C3Symbol = {
   documentation?: string;
   attributes: string[];
   returnType?: string;
+  valueType?: string;
+  functionType?: C3FunctionType;
+  moduleInfo?: C3ModuleSymbolInfo;
   receiverType?: string;
   implementedInterfaces?: string[];
   parameters: string[];
@@ -31,6 +35,32 @@ export type C3Symbol = {
   typeInfo?: C3TypeDeclarationInfo;
   scopeRange?: Range;
   children: C3Symbol[];
+};
+
+export type C3SymbolType =
+  | 'module'
+  | 'function'
+  | 'method'
+  | 'struct'
+  | 'enum'
+  | 'interface'
+  | 'type'
+  | 'variable'
+  | 'field'
+  | 'constant'
+  | 'property'
+  | 'unknown';
+
+export type C3FunctionType = {
+  params: C3Parameter[];
+  returnType?: string;
+  receiverType?: string;
+};
+
+export type C3ModuleSymbolInfo = {
+  canonicalName: string;
+  genericParams: string[];
+  alias?: string;
 };
 
 export type C3TypeDeclarationKind =

@@ -5,6 +5,7 @@ import type { Hover } from 'vscode-languageserver/node.js';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 
 import { contractDefinition, contractHover } from '../src/lsp/contracts.js';
+import { referenceAtPosition } from '../src/lsp/document-refs.js';
 import { hoverFromResolveResult } from '../src/lsp/hover.js';
 import { parseSource } from '../src/parser/c3-parser.js';
 import { ProjectIndex } from '../src/project/project-index.js';
@@ -182,6 +183,109 @@ test('hover distinguishes builtin scalar types and fault values', () => {
   assert.match(hoverValue(faultHover), /Builtin fault type/);
   assert.match(hoverValue(faultValueHover), /fault value MY_ERROR/);
   assert.doesNotMatch(hoverValue(faultValueHover), /Builtin fault type/);
+});
+
+test('hover resolves qualified module path segments independently', () => {
+  const index = new ProjectIndex();
+  const appUri = 'file:///workspace/app.c3';
+  const resultUri = 'file:///stdlib/std/collections/result.c3';
+  const source = [
+    'module app;',
+    'import std::collections::result;',
+    'struct Parse_Error {}',
+    'fn void use() {',
+    '    Result{int, Parse_Error} test = result::err(1);',
+    '}',
+    '',
+  ].join('\n');
+  const resultSource = [
+    'module std::collections::result <OkType, ErrType>;',
+    'struct Result(Printable) {',
+    '    bool is_ok;',
+    '}',
+    'fn Result err(ErrType err) { return {}; }',
+    '',
+  ].join('\n');
+  const doc = TextDocument.create(appUri, 'c3', 1, source);
+
+  index.upsert(parseSource(appUri, source), false);
+  index.upsert(
+    parseSource(resultUri, resultSource, { sourceKind: 'stdlib' }),
+    false,
+  );
+  index.rebuild();
+
+  const resultPosition = doc.positionAt(source.indexOf('result::err') + 1);
+  const ref = referenceAtPosition(doc, resultPosition);
+  assert.ok(ref);
+
+  const hover = hoverFromResolveResult(
+    index,
+    index.resolveSymbolAtReferenceSegment(
+      appUri,
+      ref.text,
+      ref.segmentIndex,
+      resultPosition,
+    ),
+  );
+  const value = hoverValue(hover);
+
+  assert.match(value, /module std::collections::result <OkType, ErrType>/);
+  assert.doesNotMatch(value, /Result err/);
+});
+
+test('hover shows instantiated function type for qualified module members', () => {
+  const index = new ProjectIndex();
+  const appUri = 'file:///workspace/app.c3';
+  const resultUri = 'file:///stdlib/std/collections/result.c3';
+  const source = [
+    'module app;',
+    'import std::collections::result;',
+    'struct Parse_Error {}',
+    'fn void use() {',
+    '    Result{int, Parse_Error} test = result::err(1);',
+    '}',
+    '',
+  ].join('\n');
+  const resultSource = [
+    'module std::collections::result <OkType, ErrType>;',
+    'struct Result(Printable) {',
+    '    bool is_ok;',
+    '}',
+    'fn Result err(ErrType err) { return {}; }',
+    '',
+  ].join('\n');
+  const doc = TextDocument.create(appUri, 'c3', 1, source);
+
+  index.upsert(parseSource(appUri, source), false);
+  index.upsert(
+    parseSource(resultUri, resultSource, { sourceKind: 'stdlib' }),
+    false,
+  );
+  index.rebuild();
+
+  const errPosition = doc.positionAt(source.indexOf('err(1)') + 1);
+  const ref = referenceAtPosition(doc, errPosition);
+  assert.ok(ref);
+
+  const hover = hoverFromResolveResult(
+    index,
+    index.resolveSymbolAtReferenceSegment(
+      appUri,
+      ref.text,
+      ref.segmentIndex,
+      errPosition,
+    ),
+    { currentUri: appUri, position: errPosition },
+  );
+  const value = hoverValue(hover);
+
+  assert.match(
+    value,
+    /fn err\(Parse_Error err\) -> Result\{int, Parse_Error\}/,
+  );
+  assert.doesNotMatch(value, /type:/);
+  assert.doesNotMatch(value, /struct Result\(Printable\)/);
 });
 
 test('contract hover and definition resolve parameters', () => {
