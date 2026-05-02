@@ -827,7 +827,12 @@ test('completionItems returns struct initializer fields after designator dot', (
         ? item.textEdit.newText
         : undefined,
     ]),
-    [['socket', CompletionItemKind.Field, 'Socket socket;', 'socket']],
+    [['.socket', CompletionItemKind.Field, 'Socket socket;', '.socket']],
+  );
+  const edit = items[0]?.textEdit;
+  assert.equal(
+    edit && 'range' in edit ? doc.getText(edit.range) : undefined,
+    '.so',
   );
   assert.equal(
     items.some((item) => item.label === 'socket_factory'),
@@ -865,8 +870,8 @@ test('completionItems returns struct initializer fields immediately after dot tr
   );
   const labels = items.map((item) => item.label);
 
-  assert.equal(labels.includes('socket'), true);
-  assert.equal(labels.includes('events'), true);
+  assert.equal(labels.includes('.socket'), true);
+  assert.equal(labels.includes('.events'), true);
   assert.equal(labels.includes('socket_factory'), false);
 });
 
@@ -901,11 +906,144 @@ test('completionItems infers struct initializer fields from assignment target', 
 
   assert.deepEqual(
     items.map((item) => [item.label, item.kind, item.detail]),
-    [['socket', CompletionItemKind.Field, 'Socket socket;']],
+    [['.socket', CompletionItemKind.Field, 'Socket socket;']],
   );
   assert.equal(
     items.some((item) => item.label === 'socket_factory'),
     false,
+  );
+});
+
+test('completionItems uses explicit initializer type for struct field designators', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'struct Parse_Error {',
+    '    int line;',
+    '    String message;',
+    '}',
+    'fn void main() {',
+    '    Parse_Error err = {.',
+    '    };',
+    '}',
+    '',
+  ].join('\n');
+  const parsed = parseSource(uri, source);
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+
+  index.upsert(parsed);
+
+  const items = completionItems(
+    index,
+    doc,
+    parsed,
+    doc.positionAt(source.indexOf('{.') + '{.'.length),
+  );
+
+  assert.deepEqual(
+    items.map((item) => [item.label, item.kind, item.detail]),
+    [
+      ['.line', CompletionItemKind.Field, 'int line;'],
+      ['.message', CompletionItemKind.Field, 'String message;'],
+    ],
+  );
+});
+
+test('completionItems uses return context to infer generic call argument initializer fields', () => {
+  const index = new ProjectIndex();
+  const appUri = 'file:///workspace/app.c3';
+  const resultUri = 'file:///stdlib/std/collections/result.c3';
+  const appSource = [
+    'module app;',
+    'import std::collections::result;',
+    'struct Parse_Error {',
+    '    int line;',
+    '    String message;',
+    '}',
+    'fn Result{int, Parse_Error} parse_number(String s) {',
+    '    return result::err({.',
+    '    });',
+    '}',
+    '',
+  ].join('\n');
+  const resultSource = [
+    'module std::collections::result <OkType, ErrType>;',
+    'struct Result {}',
+    'fn Result err(ErrType err) { return {}; }',
+    '',
+  ].join('\n');
+  const parsedApp = parseSource(appUri, appSource);
+  const parsedResult = parseSource(resultUri, resultSource, {
+    sourceKind: 'stdlib',
+  });
+  const doc = TextDocument.create(appUri, 'c3', 1, appSource);
+
+  index.upsert(parsedResult);
+  index.upsert(parsedApp);
+
+  const items = completionItems(
+    index,
+    doc,
+    parsedApp,
+    doc.positionAt(appSource.indexOf('{.') + '{.'.length),
+  );
+
+  assert.deepEqual(
+    items.map((item) => [item.label, item.kind, item.detail]),
+    [
+      ['.line', CompletionItemKind.Field, 'int line;'],
+      ['.message', CompletionItemKind.Field, 'String message;'],
+    ],
+  );
+});
+
+test('completionItems uses variable initializer context to infer generic call argument fields', () => {
+  const index = new ProjectIndex();
+  const appUri = 'file:///workspace/app.c3';
+  const resultUri = 'file:///stdlib/std/collections/result.c3';
+  const appSource = [
+    'module app;',
+    'import std::collections::result;',
+    'struct Parse_Error {',
+    '    int line;',
+    '    String message;',
+    '}',
+    'fn Result{int, Parse_Error} parse_number(String s) {',
+    '    Result{int, Parse_Error} x = result::err({.',
+    '    });',
+    '    return x;',
+    '}',
+    '',
+  ].join('\n');
+  const resultSource = [
+    'module std::collections::result <OkType, ErrType>;',
+    'struct Result {}',
+    'fn Result err(ErrType err) { return {}; }',
+    '',
+  ].join('\n');
+  const parsedApp = parseSource(appUri, appSource);
+  const parsedResult = parseSource(resultUri, resultSource, {
+    sourceKind: 'stdlib',
+  });
+  const doc = TextDocument.create(appUri, 'c3', 1, appSource);
+
+  index.upsert(parsedResult);
+  index.upsert(parsedApp);
+
+  const items = completionItems(
+    index,
+    doc,
+    parsedApp,
+    doc.positionAt(appSource.indexOf('{.') + '{.'.length),
+  );
+
+  assert.deepEqual(
+    items.map((item) => [item.label, item.kind, item.detail]),
+    [
+      ['.line', CompletionItemKind.Field, 'int line;'],
+      ['.message', CompletionItemKind.Field, 'String message;'],
+    ],
   );
 });
 

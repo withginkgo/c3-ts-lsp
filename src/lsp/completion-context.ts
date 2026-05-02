@@ -123,12 +123,14 @@ export function structInitializerFieldBeforeCursor(
   const prefix = fieldMatch[2] ?? '';
   const braceOffset = unclosedBraceBefore(text, offset);
   if (braceOffset == null) return null;
+  const dotOffset = before.lastIndexOf('.');
+  if (dotOffset < 0) return null;
 
   return {
     typeName: initializerTypeBeforeBrace(text, braceOffset) ?? undefined,
     prefix,
     replaceRange: {
-      start: doc.positionAt(offset - prefix.length),
+      start: doc.positionAt(dotOffset),
       end: position,
     },
   };
