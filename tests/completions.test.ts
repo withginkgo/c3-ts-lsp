@@ -217,6 +217,167 @@ test('completionItems filters attributes after a typed @ prefix', () => {
   });
 });
 
+test('completionItems suggests contract directives inside doc comments', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    '<*',
+    ' @r',
+    '*>',
+    'fn void use() {}',
+    '',
+  ].join('\n');
+  const parsed = parseSource(uri, source);
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+
+  index.upsert(parsed);
+
+  const item = completionItems(
+    index,
+    doc,
+    parsed,
+    doc.positionAt(source.indexOf('@r') + '@r'.length),
+  ).find((candidate) => candidate.label === '@require');
+
+  assert.equal(item?.kind, CompletionItemKind.Snippet);
+  assert.equal(item?.insertTextFormat, InsertTextFormat.Snippet);
+  assert.deepEqual(item?.textEdit, {
+    range: {
+      start: { line: 2, character: 1 },
+      end: { line: 2, character: 3 },
+    },
+    newText: '@require(${1:condition})',
+  });
+});
+
+test('completionItems suggests contract scope symbols and ensure return', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'const bool GLOBAL_READY = true;',
+    '<*',
+    ' @require li',
+    ' @require lo',
+    ' @ensure r',
+    '*>',
+    'fn bool checked(int limit) {',
+    '    bool local_ready;',
+    '    return limit > 0;',
+    '}',
+    '',
+  ].join('\n');
+  const parsed = parseSource(uri, source);
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+
+  index.upsert(parsed);
+
+  const requireItems = completionItems(
+    index,
+    doc,
+    parsed,
+    doc.positionAt(source.indexOf('li') + 'li'.length),
+  );
+  const localItems = completionItems(
+    index,
+    doc,
+    parsed,
+    doc.positionAt(source.indexOf('lo') + 'lo'.length),
+  );
+  const ensureItems = completionItems(
+    index,
+    doc,
+    parsed,
+    doc.positionAt(source.indexOf('@ensure r') + '@ensure r'.length),
+  );
+
+  assert.deepEqual(
+    requireItems.map((item) => [item.label, item.kind, item.detail]),
+    [['limit', CompletionItemKind.Variable, 'int']],
+  );
+  assert.deepEqual(
+    localItems.map((item) => [item.label, item.kind, item.detail]),
+    [['local_ready', CompletionItemKind.Variable, 'bool']],
+  );
+  assert.equal(
+    ensureItems.find((item) => item.label === 'return')?.detail,
+    'bool',
+  );
+});
+
+test('completionItems suggests parameters after an incomplete contract call form', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    '<*',
+    ' @require(',
+    '*>',
+    'fn void checked(int value) {}',
+    '',
+  ].join('\n');
+  const parsed = parseSource(uri, source);
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+
+  index.upsert(parsed);
+
+  const items = completionItems(
+    index,
+    doc,
+    parsed,
+    doc.positionAt(source.indexOf('@require(') + '@require('.length),
+  );
+
+  assert.equal(
+    items.some(
+      (item) =>
+        item.label === 'value' &&
+        item.kind === CompletionItemKind.Variable &&
+        item.detail === 'int',
+    ),
+    true,
+  );
+});
+
+test('completionItems returns members in contract expressions', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'struct User {',
+    '    bool active;',
+    '}',
+    'fn bool User.ready(&self) { return self.active; }',
+    '<*',
+    ' @require user.',
+    '*>',
+    'fn bool checked(User user) {',
+    '    return user.active;',
+    '}',
+    '',
+  ].join('\n');
+  const parsed = parseSource(uri, source);
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+
+  index.upsert(parsed);
+
+  const items = completionItems(
+    index,
+    doc,
+    parsed,
+    doc.positionAt(source.indexOf('user.') + 'user.'.length),
+  );
+
+  assert.deepEqual(
+    items.map((item) => [item.label, item.kind, item.detail]),
+    [
+      ['active', CompletionItemKind.Field, 'bool active;'],
+      ['ready', CompletionItemKind.Method, 'bool User.ready(&self)'],
+    ],
+  );
+});
+
 test('completionItems replaces the $ trigger for compile-time completions', () => {
   const index = new ProjectIndex();
   const uri = 'file:///workspace/app.c3';

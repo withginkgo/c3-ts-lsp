@@ -204,6 +204,58 @@ test('semanticDiagnostics handles contracts without treating them as ordinary re
   );
 });
 
+test('semanticDiagnostics validates contract references and side effects', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'struct User {',
+      '    bool active;',
+      '}',
+      '<*',
+      ' @require missing > 0',
+      ' @require return > 0',
+      ' @require value = 1',
+      ' @require user.missing',
+      ' @ensure value',
+      '*>',
+      'fn int checked(int value, User user) {',
+      '    return value;',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  const diagnostics = semanticDiagnostics(index, parsed);
+  const messages = diagnostics.map((diagnostic) => diagnostic.message);
+
+  assert.equal(
+    messages.includes("Unresolved symbol 'missing' in contract"),
+    true,
+  );
+  assert.equal(
+    messages.includes("'return' is only valid in @ensure contracts"),
+    true,
+  );
+  assert.equal(
+    messages.includes(
+      'Contracts should not contain side-effecting assignments',
+    ),
+    true,
+  );
+  assert.equal(messages.includes("Type 'User' has no member 'missing'"), true);
+  assert.equal(
+    messages.includes(
+      "Contract '@ensure' expression should be 'bool', got 'int'",
+    ),
+    true,
+  );
+});
+
 test('semanticDiagnostics accepts implicitly imported std::core symbols', () => {
   const index = new ProjectIndex();
   const app = parseSource(
@@ -1175,6 +1227,92 @@ test('semanticDiagnostics reports unresolved types and duplicate declarations', 
       "Unresolved type 'Missing'",
     ].sort(),
   );
+});
+
+test('semanticDiagnostics reports generic type references without parameters', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'struct Result <Type> {',
+      '    Type value;',
+      '}',
+      'struct Foo <Type> {}',
+      'struct List <Type> {}',
+      'fn void use() {',
+      '    Result res;',
+      '    Result{int} ok;',
+      '    Foo* ptr;',
+      '    List list;',
+      '    int x;',
+      '    fault err;',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(
+    semanticDiagnostics(index, parsed).map((diagnostic) => [
+      diagnostic.message,
+      diagnostic.range.start.line,
+      diagnostic.range.start.character,
+      diagnostic.range.end.character,
+    ]),
+    [
+      [
+        "'Result' is a generic struct, did you forget the parameters '{ ... }'?",
+        7,
+        4,
+        10,
+      ],
+      [
+        "'Foo' is a generic struct, did you forget the parameters '{ ... }'?",
+        9,
+        4,
+        7,
+      ],
+      [
+        "'List' is a generic struct, did you forget the parameters '{ ... }'?",
+        10,
+        4,
+        8,
+      ],
+    ],
+  );
+});
+
+test('semanticDiagnostics reports generic types inherited from generic modules', () => {
+  const index = new ProjectIndex();
+  const app = parseSource(
+    'file:///workspace/app.c3',
+    [
+      'module app;',
+      'import std::collections::list;',
+      'fn void use() {',
+      '    List list;',
+      '}',
+      '',
+    ].join('\n'),
+  );
+  const list = parseSource(
+    'file:///stdlib/std/collections/list.c3',
+    ['module std::collections::list <Type>;', 'struct List {}', ''].join('\n'),
+    { sourceKind: 'stdlib' },
+  );
+
+  index.upsert(app, false);
+  index.upsert(list, false);
+  index.rebuild();
+
+  assert.deepEqual(
+    semanticDiagnostics(index, app).map((diagnostic) => diagnostic.message),
+    ["'List' is a generic struct, did you forget the parameters '{ ... }'?"],
+  );
+  assert.deepEqual(semanticDiagnostics(index, list), []);
 });
 
 test('semanticDiagnostics validates call arguments, initializers, assignments, and conditions', () => {

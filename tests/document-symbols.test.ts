@@ -38,3 +38,34 @@ test('documentSymbols includes nested declaration children', () => {
     ],
   );
 });
+
+test('documentSymbols includes contract clauses as callable children', () => {
+  const parsed = parseSource(
+    'file:///workspace/app.c3',
+    [
+      'module app;',
+      '<*',
+      ' @require value > 0',
+      ' @ensure return == value',
+      '*>',
+      'fn int checked(int value) { return value; }',
+      '',
+    ].join('\n'),
+  );
+  const checked = documentSymbols(parsed).find(
+    (symbol) => symbol.name === 'checked',
+  );
+
+  assert.deepEqual(
+    checked?.children?.map((symbol) => [
+      symbol.name,
+      symbol.kind,
+      symbol.detail,
+    ]),
+    [
+      ['@require', SymbolKind.Event, 'value > 0'],
+      ['@ensure', SymbolKind.Event, 'return == value'],
+      ['value', SymbolKind.Variable, 'int value'],
+    ],
+  );
+});

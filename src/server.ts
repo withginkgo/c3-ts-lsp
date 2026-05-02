@@ -18,6 +18,7 @@ import { TextDocument } from 'vscode-languageserver-textdocument';
 import { semanticDiagnostics } from './analysis/diagnostics.js';
 import { codeActions } from './lsp/code-actions.js';
 import { completionItems } from './lsp/completions.js';
+import { contractDefinition, contractHover } from './lsp/contracts.js';
 import { wordAtPosition } from './lsp/document-refs.js';
 import { documentSymbols } from './lsp/document-symbols.js';
 import { hoverFromResolveResult } from './lsp/hover.js';
@@ -189,6 +190,10 @@ connection.onHover((params): Hover | null => {
   const doc = documents.get(params.textDocument.uri);
   if (!doc) return null;
 
+  const current = projectIndex.getParsed(params.textDocument.uri);
+  const contract = contractHover(projectIndex, doc, current, params.position);
+  if (contract) return contract;
+
   const word = wordAtPosition(doc, params.position);
   if (!word) return null;
 
@@ -204,6 +209,15 @@ connection.onHover((params): Hover | null => {
 connection.onDefinition((params): Location | Location[] | null => {
   const doc = documents.get(params.textDocument.uri);
   if (!doc) return null;
+
+  const current = projectIndex.getParsed(params.textDocument.uri);
+  const contract = contractDefinition(
+    projectIndex,
+    doc,
+    current,
+    params.position,
+  );
+  if (contract) return contract;
 
   const word = wordAtPosition(doc, params.position);
   if (!word) return null;
@@ -278,7 +292,7 @@ connection.onCodeAction((params) => {
 connection.languages.semanticTokens.on((params) => {
   const current = projectIndex.getParsed(params.textDocument.uri);
 
-  return current ? semanticTokens(current) : { data: [] };
+  return current ? semanticTokens(current, projectIndex) : { data: [] };
 });
 
 connection.languages.inlayHint.on((params) => {

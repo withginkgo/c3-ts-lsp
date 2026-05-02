@@ -1,4 +1,4 @@
-import type { DocumentSymbol } from 'vscode-languageserver/node.js';
+import { SymbolKind, type DocumentSymbol } from 'vscode-languageserver/node.js';
 
 import type { C3Symbol, ParsedDocument } from '../shared/types.js';
 
@@ -15,9 +15,32 @@ function toDocumentSymbol(symbol: C3Symbol): DocumentSymbol {
     selectionRange: symbol.selectionRange,
   };
 
-  if (symbol.children.length > 0) {
-    documentSymbol.children = symbol.children.map(toDocumentSymbol);
+  const children = [
+    ...contractDocumentSymbols(symbol),
+    ...symbol.children.map(toDocumentSymbol),
+  ];
+
+  if (children.length > 0) {
+    documentSymbol.children = children;
   }
 
   return documentSymbol;
+}
+
+function contractDocumentSymbols(symbol: C3Symbol): DocumentSymbol[] {
+  return (symbol.contracts ?? [])
+    .filter(
+      (contract) => contract.kind === 'require' || contract.kind === 'ensure',
+    )
+    .map((contract) => ({
+      name: contract.name,
+      detail:
+        contract.expressions.length > 0
+          ? contract.expressions.join(', ')
+          : undefined,
+      kind: SymbolKind.Event,
+      range: contract.range,
+      selectionRange: contract.nameRange ?? contract.range,
+      children: [],
+    }));
 }

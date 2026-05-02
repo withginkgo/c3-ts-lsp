@@ -36,6 +36,7 @@ import {
   type StructInitializerFieldCompletionContext,
   typeMethodDeclarationBeforeCursor,
 } from './completion-context.js';
+import { contractCompletionItems } from './contracts.js';
 import { importTextEdit } from './import-edits.js';
 
 const MAX_AUTO_IMPORT_COMPLETIONS = 200;
@@ -48,6 +49,9 @@ export function completionItems(
   position: Position,
 ): CompletionItem[] {
   if (!doc || !current) return keywordCompletions();
+
+  const contractItems = contractCompletionItems(index, doc, current, position);
+  if (contractItems) return contractItems;
 
   const modulePathCompletion = modulePathCompletionBeforeCursor(doc, position);
 

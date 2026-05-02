@@ -6,6 +6,7 @@ import {
   semanticTokens,
 } from '../src/lsp/semantic-tokens.js';
 import { parseSource } from '../src/parser/c3-parser.js';
+import { ProjectIndex } from '../src/project/project-index.js';
 
 test('semanticTokens encodes declaration tokens for symbols and locals', () => {
   const source = [
@@ -31,6 +32,50 @@ test('semanticTokens encodes declaration tokens for symbols and locals', () => {
       ['response', 'variable'],
       ['count', 'variable'],
     ],
+  );
+});
+
+test('semanticTokens encodes contract clauses and expressions', () => {
+  const index = new ProjectIndex();
+  const source = [
+    'module app;',
+    '<*',
+    ' @require value > 0',
+    ' @ensure return == value',
+    '*>',
+    'fn int checked(int value) {',
+    '    return value;',
+    '}',
+    '',
+  ].join('\n');
+  const parsed = parseSource('file:///workspace/app.c3', source);
+  const lines = source.split('\n');
+
+  index.upsert(parsed);
+
+  const decoded = decodeTokens(lines, semanticTokens(parsed, index).data);
+
+  assert.equal(
+    decoded.some(
+      (token) => token.text === '@require' && token.type === 'keyword',
+    ),
+    true,
+  );
+  assert.equal(
+    decoded.some(
+      (token) => token.text === 'value' && token.type === 'variable',
+    ),
+    true,
+  );
+  assert.equal(
+    decoded.some((token) => token.text === '>' && token.type === 'operator'),
+    true,
+  );
+  assert.equal(
+    decoded.some(
+      (token) => token.text === 'return' && token.type === 'keyword',
+    ),
+    true,
   );
 });
 

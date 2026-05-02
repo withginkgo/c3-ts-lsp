@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { SymbolKind } from 'vscode-languageserver/node.js';
 
 import { parseSource } from '../src/parser/c3-parser.js';
+import type { C3Symbol } from '../src/shared/types.js';
 
 test('parseSource extracts the module name and top-level function symbols', () => {
   const file = 'testdata/simple/main.c3';
@@ -135,6 +136,76 @@ test('parseSource extracts type alias targets', () => {
       ['UserName', 'alias UserName = String;', 'String'],
     ],
   );
+});
+
+test('parseSource records type declaration metadata', () => {
+  const parsed = parseSource(
+    'file:///workspace/types.c3',
+    [
+      'module app <ModuleType>;',
+      'struct Result <Type> {',
+      '    Type value;',
+      '}',
+      'union Payload { int code; }',
+      'bitstruct Flags : uint { bool ready : 0; }',
+      'enum Color { RED }',
+      'typedef Id <Type> = inline Type;',
+      'alias Name = String;',
+      'faultdef MY_ERROR;',
+      '',
+    ].join('\n'),
+  );
+  const byName = new Map(parsed.symbols.map((symbol) => [symbol.name, symbol]));
+
+  assert.deepEqual(typeInfoSummary(byName.get('Result')), [
+    'struct',
+    true,
+    1,
+    'declaration',
+    { line: 1, character: 7 },
+  ]);
+  assert.deepEqual(typeInfoSummary(byName.get('Payload')), [
+    'union',
+    true,
+    1,
+    'module',
+    { line: 4, character: 6 },
+  ]);
+  assert.deepEqual(typeInfoSummary(byName.get('Flags')), [
+    'bitstruct',
+    true,
+    1,
+    'module',
+    { line: 5, character: 10 },
+  ]);
+  assert.deepEqual(typeInfoSummary(byName.get('Color')), [
+    'enum',
+    true,
+    1,
+    'module',
+    { line: 6, character: 5 },
+  ]);
+  assert.deepEqual(typeInfoSummary(byName.get('Id')), [
+    'typedef',
+    true,
+    1,
+    'declaration',
+    { line: 7, character: 8 },
+  ]);
+  assert.deepEqual(typeInfoSummary(byName.get('Name')), [
+    'alias',
+    true,
+    1,
+    'module',
+    { line: 8, character: 6 },
+  ]);
+  assert.deepEqual(typeInfoSummary(byName.get('MY_ERROR')), [
+    'fault-value',
+    false,
+    0,
+    undefined,
+    { line: 9, character: 9 },
+  ]);
 });
 
 test('parseSource extracts Phase 1 top-level declaration coverage', () => {
@@ -882,3 +953,15 @@ test('parseSource reports missing semicolons in top-level directives', () => {
     [["Missing ';'", 'c3-lsp', 1, 14]],
   );
 });
+
+function typeInfoSummary(symbol: C3Symbol | undefined): unknown[] {
+  const info = symbol?.typeInfo;
+
+  return [
+    info?.kind,
+    info?.isGeneric,
+    info?.genericParameterCount,
+    info?.genericSource,
+    info?.selectionRange.start,
+  ];
+}

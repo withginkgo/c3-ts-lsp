@@ -154,6 +154,17 @@ function expressionContractDiagnostics(
     );
 
     for (const expression of contractExpressionNodes(node)) {
+      diagnostics.push(
+        ...contractReferenceDiagnostics(
+          index,
+          parsed,
+          symbol,
+          name,
+          expression,
+        ),
+        ...contractSideEffectDiagnostics(expression),
+      );
+
       if (containsNodeOfType(expression, 'rethrow_expr')) {
         diagnostics.push(
           error(
@@ -198,6 +209,79 @@ function expressionContractDiagnostics(
   }
 
   return diagnostics;
+}
+
+function contractReferenceDiagnostics(
+  index: ProjectIndex,
+  parsed: ParsedDocument,
+  symbol: C3Symbol,
+  contractName: string | undefined,
+  expression: SyntaxNode,
+): Diagnostic[] {
+  const diagnostics: Diagnostic[] = [];
+
+  for (const ident of contractIdentifierExpressions(expression)) {
+    if (ident.text === 'return') {
+      if (contractName !== '@ensure') {
+        diagnostics.push(
+          warning(
+            rangeFromNode(ident),
+            "'return' is only valid in @ensure contracts",
+          ),
+        );
+      }
+
+      continue;
+    }
+
+    if (resolveContractIdentifier(index, parsed, symbol, ident.text)) {
+      continue;
+    }
+
+    diagnostics.push(
+      error(
+        rangeFromNode(ident),
+        `Unresolved symbol '${ident.text}' in contract`,
+      ),
+    );
+  }
+
+  for (const field of contractFieldExpressions(expression)) {
+    const argument = field.childForFieldName('argument');
+    const member = field.childForFieldName('field');
+    if (!argument || !member) continue;
+
+    const typeName = contractExpressionTypeName(
+      index,
+      parsed,
+      symbol,
+      argument,
+    );
+    if (!typeName) continue;
+
+    const resolved = index
+      .memberSymbolsForType(parsed.uri, typeName, symbol.selectionRange.start)
+      .some((candidate) => candidate.name === member.text);
+    if (resolved) continue;
+
+    diagnostics.push(
+      error(
+        rangeFromNode(member),
+        `Type '${typeName}' has no member '${member.text}'`,
+      ),
+    );
+  }
+
+  return diagnostics;
+}
+
+function contractSideEffectDiagnostics(expression: SyntaxNode): Diagnostic[] {
+  return nodesOfType(expression, 'assignment_expr').map((assignment) =>
+    warning(
+      rangeFromNode(assignment),
+      'Contracts should not contain side-effecting assignments',
+    ),
+  );
 }
 
 function contractCallDiagnostics(
@@ -317,6 +401,49 @@ function contractExpressionTypeName(
     ].find((item) => item.name === expression.text);
 
     if (parameter?.type) return parameter.type;
+
+    const resolved = resolveContractIdentifier(
+      index,
+      parsed,
+      symbol,
+      expression.text,
+    );
+
+    return 'returnType' in (resolved ?? {})
+      ? (resolved as C3Symbol).returnType
+      : (resolved as C3Parameter | undefined)?.type;
+  }
+
+  if (expression.type === 'field_expr') {
+    const argument = expression.childForFieldName('argument');
+    const field = expression.childForFieldName('field');
+    if (!argument || !field) return undefined;
+
+    const typeName = contractExpressionTypeName(
+      index,
+      parsed,
+      symbol,
+      argument,
+    );
+    if (!typeName) return undefined;
+
+    return index
+      .memberSymbolsForType(parsed.uri, typeName, symbol.selectionRange.start)
+      .find((member) => member.name === field.text)?.returnType;
+  }
+
+  if (expression.type === 'paren_expr' || expression.type === 'paren_cond') {
+    const inner = expression.namedChildren[0];
+    return inner
+      ? contractExpressionTypeName(index, parsed, symbol, inner)
+      : undefined;
+  }
+
+  if (expression.type === 'unary_expr') {
+    const argument = expression.childForFieldName('argument');
+    return argument
+      ? contractExpressionTypeName(index, parsed, symbol, argument)
+      : undefined;
   }
 
   if (expression.type === 'binary_expr') {
@@ -511,6 +638,67 @@ function containsNodeOfType(node: SyntaxNode, type: string): boolean {
   return node.namedChildren.some((child) => containsNodeOfType(child, type));
 }
 
+function nodesOfType(node: SyntaxNode, type: string): SyntaxNode[] {
+  const found: SyntaxNode[] = [];
+
+  function visit(current: SyntaxNode): void {
+    if (current.type === type) found.push(current);
+
+    for (const child of current.namedChildren) {
+      visit(child);
+    }
+  }
+
+  visit(node);
+  return found;
+}
+
+function contractIdentifierExpressions(expression: SyntaxNode): SyntaxNode[] {
+  const identifiers: SyntaxNode[] = [];
+
+  function visit(node: SyntaxNode): void {
+    if (node.type === 'ident_expr') {
+      identifiers.push(node);
+      return;
+    }
+
+    for (const child of node.namedChildren) {
+      visit(child);
+    }
+  }
+
+  visit(expression);
+  return identifiers;
+}
+
+function contractFieldExpressions(expression: SyntaxNode): SyntaxNode[] {
+  return nodesOfType(expression, 'field_expr');
+}
+
+function resolveContractIdentifier(
+  index: ProjectIndex,
+  parsed: ParsedDocument,
+  symbol: C3Symbol,
+  name: string,
+): C3Symbol | C3Parameter | undefined {
+  const parameter = [
+    ...callableParameters(symbol),
+    ...(symbol.macroBodyParameters ?? []),
+  ].find((item) => item.name === name);
+
+  if (parameter) return parameter;
+
+  const scoped = parsed.scopedSymbols.find(
+    (candidate) =>
+      candidate.name === name &&
+      rangeContainsPosition(symbol.range, candidate.selectionRange.start),
+  );
+  if (scoped) return scoped;
+
+  return index.resolveSymbol(parsed.uri, name, symbol.selectionRange.start)
+    .selected;
+}
+
 function ancestorOfType(
   node: SyntaxNode | null,
   type: string,
@@ -562,9 +750,28 @@ function sameRange(left: Range, right: Range): boolean {
   );
 }
 
+function rangeContainsPosition(
+  range: Range,
+  position: { line: number; character: number },
+): boolean {
+  return (
+    comparePositions(range.start, position) <= 0 &&
+    comparePositions(position, range.end) <= 0
+  );
+}
+
 function error(range: Range, message: string): Diagnostic {
   return {
     severity: DiagnosticSeverity.Error,
+    range,
+    message,
+    source: diagnosticSource,
+  };
+}
+
+function warning(range: Range, message: string): Diagnostic {
+  return {
+    severity: DiagnosticSeverity.Warning,
     range,
     message,
     source: diagnosticSource,

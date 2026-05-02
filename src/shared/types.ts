@@ -24,8 +24,31 @@ export type C3Symbol = {
   macroBodyName?: string;
   macroBodyParameters?: C3Parameter[];
   contracts?: C3Contract[];
+  typeInfo?: C3TypeDeclarationInfo;
   scopeRange?: Range;
   children: C3Symbol[];
+};
+
+export type C3TypeDeclarationKind =
+  | 'struct'
+  | 'union'
+  | 'enum'
+  | 'bitstruct'
+  | 'alias'
+  | 'typedef'
+  | 'builtin'
+  | 'fault-value'
+  | 'constdef'
+  | 'interface';
+
+export type C3TypeDeclarationInfo = {
+  name: string;
+  kind: C3TypeDeclarationKind;
+  isGeneric: boolean;
+  genericParameterCount: number;
+  range: Range;
+  selectionRange: Range;
+  genericSource?: 'declaration' | 'module';
 };
 
 export type C3Parameter = {
@@ -49,6 +72,7 @@ export type C3ContractKind =
 export type C3Contract = {
   kind: C3ContractKind;
   name: string;
+  nameRange?: Range;
   range: Range;
   expressions: string[];
   expressionRanges: Range[];

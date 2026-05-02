@@ -81,6 +81,10 @@ export function ambiguousHover(candidates: C3Symbol[]): Hover {
 }
 
 function formatPrimarySymbol(symbol: C3Symbol): string {
+  if (symbol.typeInfo?.kind === 'fault-value') {
+    return `fault value ${symbol.name}`;
+  }
+
   return aggregateKinds.has(symbol.kind)
     ? formatAggregateSymbol(symbol)
     : symbol.signature;

@@ -40,6 +40,16 @@ export function typeReferenceDiagnostics(
       typeName,
       rangeFromNode(ref).start,
     );
+    const genericMissingParameters = genericTypeMissingParameters(
+      parsed,
+      ref,
+      result.selected,
+    );
+
+    if (genericMissingParameters) {
+      diagnostics.push(genericMissingParameters);
+      continue;
+    }
 
     if (result.reason === 'not_found') {
       diagnostics.push({
@@ -61,6 +71,47 @@ export function typeReferenceDiagnostics(
   }
 
   return diagnostics.sort((a, b) => compareRanges(a.range, b.range));
+}
+
+function genericTypeMissingParameters(
+  parsed: ParsedDocument,
+  ref: SyntaxNode,
+  symbol: C3Symbol | undefined,
+): Diagnostic | undefined {
+  if (!symbol) return undefined;
+
+  const typeInfo = symbol?.typeInfo;
+  if (!typeInfo?.isGeneric || typeInfo.genericParameterCount <= 0) {
+    return undefined;
+  }
+
+  if (typeInfo.kind === 'fault-value' || typeInfo.kind === 'builtin') {
+    return undefined;
+  }
+
+  if (isParameterizedTypeReference(ref)) return undefined;
+  if (isSameGenericModuleReference(parsed, symbol)) return undefined;
+
+  return {
+    severity: DiagnosticSeverity.Error,
+    range: typeReferenceRange(ref),
+    message: `'${symbol.name}' is a generic ${typeInfo.kind}, did you forget the parameters '{ ... }'?`,
+    source: diagnosticSource,
+  };
+}
+
+function isParameterizedTypeReference(ref: SyntaxNode): boolean {
+  return ref.parent?.type === 'generic_type_ident';
+}
+
+function isSameGenericModuleReference(
+  parsed: ParsedDocument,
+  symbol: C3Symbol,
+): boolean {
+  return (
+    symbol.typeInfo?.genericSource === 'module' &&
+    symbol.moduleName === parsed.moduleName
+  );
 }
 
 export function declarationDiagnostics(

@@ -6,7 +6,12 @@ import {
   type SemanticTokensLegend,
 } from 'vscode-languageserver/node.js';
 
+import type { ProjectIndex } from '../project/project-index.js';
 import type { C3Symbol, ParsedDocument } from '../shared/types.js';
+import {
+  contractSemanticTokens,
+  type ContractSemanticToken,
+} from './contracts.js';
 
 export const semanticTokenLegend: SemanticTokensLegend = {
   tokenTypes: [
@@ -19,28 +24,62 @@ export const semanticTokenLegend: SemanticTokensLegend = {
     'property',
     'variable',
     'enumMember',
+    'keyword',
+    'operator',
   ],
   tokenModifiers: ['declaration', 'readonly'],
 };
 
-export function semanticTokens(parsed: ParsedDocument): SemanticTokens {
-  const builder = new SemanticTokensBuilder();
+type SemanticToken = {
+  range: Range;
+  type: string;
+  modifiers: number;
+};
 
-  for (const symbol of semanticTokenSymbols(parsed)) {
-    const type = tokenTypeForSymbol(symbol);
-    if (type == null || !sameLine(symbol.selectionRange)) continue;
+export function semanticTokens(
+  parsed: ParsedDocument,
+  index?: ProjectIndex,
+): SemanticTokens {
+  const builder = new SemanticTokensBuilder();
+  const tokens = [
+    ...semanticTokenSymbols(parsed).flatMap(symbolSemanticToken),
+    ...contractSemanticTokens(parsed, index).map(contractToken),
+  ]
+    .filter((token) => sameLine(token.range))
+    .sort(compareTokensByRange);
+
+  for (const token of tokens) {
+    const type = tokenTypeForName(token.type);
+    if (type == null) continue;
 
     builder.push(
-      symbol.selectionRange.start.line,
-      symbol.selectionRange.start.character,
-      symbol.selectionRange.end.character -
-        symbol.selectionRange.start.character,
+      token.range.start.line,
+      token.range.start.character,
+      token.range.end.character - token.range.start.character,
       type,
-      tokenModifiersForSymbol(symbol),
+      token.modifiers,
     );
   }
 
   return builder.build();
+}
+
+function symbolSemanticToken(symbol: C3Symbol): SemanticToken[] {
+  return [
+    {
+      range: symbol.selectionRange,
+      type: tokenTypeNameForSymbol(symbol),
+      modifiers: tokenModifiersForSymbol(symbol),
+    },
+  ];
+}
+
+function contractToken(token: ContractSemanticToken): SemanticToken {
+  return {
+    range: token.range,
+    type: token.type,
+    modifiers: 0,
+  };
 }
 
 function semanticTokenSymbols(parsed: ParsedDocument): C3Symbol[] {
@@ -71,11 +110,8 @@ function flattenSymbols(symbols: C3Symbol[]): C3Symbol[] {
   ]);
 }
 
-function tokenTypeForSymbol(symbol: C3Symbol): number | undefined {
-  const index = semanticTokenLegend.tokenTypes.indexOf(
-    tokenTypeNameForSymbol(symbol),
-  );
-
+function tokenTypeForName(name: string): number | undefined {
+  const index = semanticTokenLegend.tokenTypes.indexOf(name);
   return index >= 0 ? index : undefined;
 }
 
@@ -121,6 +157,15 @@ function compareSymbolsByRange(a: C3Symbol, b: C3Symbol): number {
   return (
     a.selectionRange.start.line - b.selectionRange.start.line ||
     a.selectionRange.start.character - b.selectionRange.start.character
+  );
+}
+
+function compareTokensByRange(a: SemanticToken, b: SemanticToken): number {
+  return (
+    a.range.start.line - b.range.start.line ||
+    a.range.start.character - b.range.start.character ||
+    a.range.end.line - b.range.end.line ||
+    a.range.end.character - b.range.end.character
   );
 }
 

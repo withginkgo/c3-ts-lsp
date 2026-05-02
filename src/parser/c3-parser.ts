@@ -15,6 +15,7 @@ import type {
   C3ModuleAlias,
   C3Parameter,
   C3Symbol,
+  C3TypeDeclarationInfo,
   ParsedDocument,
   SourceKind,
 } from '../shared/types.js';
@@ -38,11 +39,29 @@ export function parseSource(
   const importSpecs = extractImportSpecs(tree.rootNode);
   const imports = importSpecs.map((imp) => imp.path);
   const moduleAliases = extractModuleAliases(doc, tree.rootNode);
-  const parsedSymbols = extractTopLevelSymbols(doc, tree.rootNode, moduleName);
+  const moduleGenericParameterCount = moduleGenericParameters(
+    tree.rootNode,
+  ).length;
+  const parsedSymbols = extractTopLevelSymbols(
+    doc,
+    tree.rootNode,
+    moduleName,
+    moduleGenericParameterCount,
+  );
   const symbols = tree.rootNode.hasError
     ? mergeRecoveredSymbols(parsedSymbols, [
-        ...recoverTopLevelAggregateSymbols(doc, source, moduleName),
-        ...recoverTopLevelTypeAliasSymbols(doc, source, moduleName),
+        ...recoverTopLevelAggregateSymbols(
+          doc,
+          source,
+          moduleName,
+          moduleGenericParameterCount,
+        ),
+        ...recoverTopLevelTypeAliasSymbols(
+          doc,
+          source,
+          moduleName,
+          moduleGenericParameterCount,
+        ),
         ...recoverTopLevelCallableSymbols(doc, source, moduleName),
       ])
     : parsedSymbols;
@@ -74,6 +93,14 @@ function extractModuleName(root: SyntaxNode): string {
 
   const modulePath = moduleDecl.childForFieldName('path');
   return modulePath?.text ?? '';
+}
+
+function moduleGenericParameters(root: SyntaxNode): string[] {
+  const moduleDecl = root.namedChildren.find(
+    (child) => child.type === 'module_declaration',
+  );
+
+  return moduleDecl ? genericParameterNames(moduleDecl) : [];
 }
 
 function extractModuleAttributes(root: SyntaxNode): string[] {
@@ -143,11 +170,19 @@ function extractTopLevelSymbols(
   doc: TextDocument,
   root: SyntaxNode,
   moduleName: string,
+  moduleGenericParameterCount: number,
 ): C3Symbol[] {
   const symbols: C3Symbol[] = [];
 
   for (const node of root.namedChildren) {
-    symbols.push(...topLevelSymbolsForNode(doc, node, moduleName));
+    symbols.push(
+      ...topLevelSymbolsForNode(
+        doc,
+        node,
+        moduleName,
+        moduleGenericParameterCount,
+      ),
+    );
   }
 
   return symbols;
@@ -217,6 +252,7 @@ function topLevelSymbolsForNode(
   doc: TextDocument,
   node: SyntaxNode,
   moduleName: string,
+  moduleGenericParameterCount: number,
 ): C3Symbol[] {
   switch (node.type) {
     case 'func_definition':
@@ -235,6 +271,7 @@ function topLevelSymbolsForNode(
           moduleName,
           SymbolKind.Struct,
           structMemberSymbols(doc, node, moduleName),
+          moduleGenericParameterCount,
         ),
       ]);
 
@@ -246,6 +283,7 @@ function topLevelSymbolsForNode(
           moduleName,
           SymbolKind.Struct,
           bitstructMemberSymbols(doc, node, moduleName),
+          moduleGenericParameterCount,
         ),
       ]);
 
@@ -257,6 +295,7 @@ function topLevelSymbolsForNode(
           moduleName,
           SymbolKind.Enum,
           enumChildSymbols(doc, node, moduleName),
+          moduleGenericParameterCount,
         ),
       ]);
 
@@ -268,6 +307,7 @@ function topLevelSymbolsForNode(
           moduleName,
           SymbolKind.Constant,
           enumChildSymbols(doc, node, moduleName),
+          moduleGenericParameterCount,
         ),
       ]);
 
@@ -279,6 +319,7 @@ function topLevelSymbolsForNode(
           moduleName,
           SymbolKind.Interface,
           interfaceMemberSymbols(doc, node, moduleName),
+          moduleGenericParameterCount,
         ),
       ]);
 
@@ -292,6 +333,7 @@ function topLevelSymbolsForNode(
           node,
           moduleName,
           SymbolKind.TypeParameter,
+          moduleGenericParameterCount,
         ),
       ]);
 
@@ -302,6 +344,7 @@ function topLevelSymbolsForNode(
           node,
           moduleName,
           SymbolKind.TypeParameter,
+          moduleGenericParameterCount,
         ),
       ]);
 
@@ -312,6 +355,7 @@ function topLevelSymbolsForNode(
           node,
           moduleName,
           SymbolKind.Property,
+          0,
           parameterSymbols(doc, node, moduleName),
         ),
       ]);
@@ -370,6 +414,7 @@ function aggregateSymbol(
   moduleName: string,
   kind: SymbolKind,
   children: C3Symbol[] = [],
+  moduleGenericParameterCount = 0,
 ): C3Symbol | null {
   const nameNode = extractNameNode(node);
   if (!nameNode) return null;
@@ -379,6 +424,13 @@ function aggregateSymbol(
     children,
     implementedInterfaces: implementedInterfacesFor(node),
     signature: declarationSignature(node),
+    typeInfo: typeDeclarationInfo(
+      doc,
+      node,
+      nameNode,
+      typeDeclarationKindForNode(node),
+      moduleGenericParameterCount,
+    ),
   });
 }
 
@@ -387,10 +439,13 @@ function simpleDeclarationSymbol(
   node: SyntaxNode,
   moduleName: string,
   kind: SymbolKind,
+  moduleGenericParameterCount = 0,
   children: C3Symbol[] = [],
 ): C3Symbol | null {
   const nameNode = extractNameNode(node);
   if (!nameNode) return null;
+
+  const declarationKind = typeDeclarationKindForNode(node);
 
   return createSymbol(doc, node, nameNode, moduleName, kind, {
     children,
@@ -398,6 +453,16 @@ function simpleDeclarationSymbol(
     returnType:
       node.childForFieldName('type')?.text ??
       directChildOfType(node, 'type')?.text,
+    typeInfo:
+      declarationKind === 'alias' || declarationKind === 'typedef'
+        ? typeDeclarationInfo(
+            doc,
+            node,
+            nameNode,
+            declarationKind,
+            moduleGenericParameterCount,
+          )
+        : undefined,
   });
 }
 
@@ -469,6 +534,8 @@ function faultSymbols(
   return directChildrenOfType(node, 'const_ident').map((nameNode) =>
     createSymbol(doc, node, nameNode, moduleName, SymbolKind.Constant, {
       signature: declarationSignature(node),
+      returnType: 'fault',
+      typeInfo: typeDeclarationInfo(doc, node, nameNode, 'fault-value'),
     }),
   );
 }
@@ -996,6 +1063,7 @@ function recoverTopLevelAggregateSymbols(
   doc: TextDocument,
   source: string,
   moduleName: string,
+  moduleGenericParameterCount: number,
 ): C3Symbol[] {
   const symbols: C3Symbol[] = [];
   const aggregateStart = /(^|\n)(?:struct|union|enum|constdef)\s+/g;
@@ -1006,7 +1074,13 @@ function recoverTopLevelAggregateSymbols(
 
     if (braceDepthBefore(source, startIndex) !== 0) continue;
 
-    const symbol = recoverAggregateSymbol(doc, source, moduleName, startIndex);
+    const symbol = recoverAggregateSymbol(
+      doc,
+      source,
+      moduleName,
+      startIndex,
+      moduleGenericParameterCount,
+    );
     if (symbol) symbols.push(symbol);
   }
 
@@ -1018,6 +1092,7 @@ function recoverAggregateSymbol(
   source: string,
   moduleName: string,
   startIndex: number,
+  moduleGenericParameterCount: number,
 ): C3Symbol | null {
   const headerEnd = topLevelDeclarationHeaderEndIndex(source, startIndex);
   const header = source.slice(startIndex, headerEnd).trim();
@@ -1035,6 +1110,15 @@ function recoverAggregateSymbol(
       : match.groups.kind === 'constdef'
         ? SymbolKind.Constant
         : SymbolKind.Struct;
+  const range = rangeFromOffsets(doc, startIndex, bodyRange?.end ?? headerEnd);
+  const selectionRange = rangeFromOffsets(
+    doc,
+    nameStart,
+    nameStart + name.length,
+  );
+  const ownGenericParameterCount = genericParameterCountFromText(header);
+  const genericParameterCount =
+    ownGenericParameterCount || moduleGenericParameterCount;
   const children =
     bodyRange &&
     (match.groups.kind === 'enum' || match.groups.kind === 'constdef')
@@ -1053,8 +1137,8 @@ function recoverAggregateSymbol(
     moduleName,
     kind,
     uri: doc.uri,
-    range: rangeFromOffsets(doc, startIndex, bodyRange?.end ?? headerEnd),
-    selectionRange: rangeFromOffsets(doc, nameStart, nameStart + name.length),
+    range,
+    selectionRange,
     bodyRange: bodyRange
       ? rangeFromOffsets(doc, bodyRange.start, bodyRange.end)
       : undefined,
@@ -1063,6 +1147,19 @@ function recoverAggregateSymbol(
     attributes: attributesFromText(header),
     implementedInterfaces: implementedInterfacesFromAggregateHeader(header),
     parameters: [],
+    typeInfo: {
+      name,
+      kind: recoveredAggregateTypeKind(match.groups.kind),
+      isGeneric: genericParameterCount > 0,
+      genericParameterCount,
+      range,
+      selectionRange,
+      genericSource: ownGenericParameterCount
+        ? 'declaration'
+        : moduleGenericParameterCount
+          ? 'module'
+          : undefined,
+    },
     children,
   };
 }
@@ -1112,6 +1209,7 @@ function recoverTopLevelTypeAliasSymbols(
   doc: TextDocument,
   source: string,
   moduleName: string,
+  moduleGenericParameterCount: number,
 ): C3Symbol[] {
   const symbols: C3Symbol[] = [];
   const aliasStart = /(^|\n)(?:typedef|alias)\s+/g;
@@ -1122,7 +1220,13 @@ function recoverTopLevelTypeAliasSymbols(
 
     if (braceDepthBefore(source, startIndex) !== 0) continue;
 
-    const symbol = recoverTypeAliasSymbol(doc, source, moduleName, startIndex);
+    const symbol = recoverTypeAliasSymbol(
+      doc,
+      source,
+      moduleName,
+      startIndex,
+      moduleGenericParameterCount,
+    );
     if (symbol) symbols.push(symbol);
   }
 
@@ -1134,30 +1238,55 @@ function recoverTypeAliasSymbol(
   source: string,
   moduleName: string,
   startIndex: number,
+  moduleGenericParameterCount: number,
 ): C3Symbol | null {
   const endIndex = topLevelDeclarationEndIndex(source, startIndex);
   const declaration = source.slice(startIndex, endIndex).trim();
   const match = declaration.match(
-    /^(?<kind>typedef|alias)\s+(?<name>[A-Za-z_$@][A-Za-z0-9_$@]*)\s*=\s*(?:inline\s+)?(?<target>[^;]+?)\s*;?$/,
+    /^(?<kind>typedef|alias)\s+(?<name>[A-Za-z_$@][A-Za-z0-9_$@]*)(?:\s*<(?<generic>[^>]*)>)?\s*=\s*(?:inline\s+)?(?<target>[^;]+?)\s*;?$/,
   );
   if (!match?.groups || match.groups.target.startsWith('module ')) return null;
 
   const name = match.groups.name;
   const nameStart = source.indexOf(name, startIndex);
+  const range = rangeFromOffsets(doc, startIndex, endIndex);
+  const selectionRange = rangeFromOffsets(
+    doc,
+    nameStart,
+    nameStart + name.length,
+  );
+  const ownGenericParameterCount = genericParameterCountFromText(
+    match.groups.generic,
+  );
+  const genericParameterCount =
+    ownGenericParameterCount || moduleGenericParameterCount;
 
   return {
     name,
     moduleName,
     kind: SymbolKind.TypeParameter,
     uri: doc.uri,
-    range: rangeFromOffsets(doc, startIndex, endIndex),
-    selectionRange: rangeFromOffsets(doc, nameStart, nameStart + name.length),
+    range,
+    selectionRange,
     signature: compactText(declaration),
     documentation: undefined,
     attributes: attributesFromText(declaration),
     returnType: match.groups.target.trim(),
     implementedInterfaces: [],
     parameters: [],
+    typeInfo: {
+      name,
+      kind: match.groups.kind === 'alias' ? 'alias' : 'typedef',
+      isGeneric: genericParameterCount > 0,
+      genericParameterCount,
+      range,
+      selectionRange,
+      genericSource: ownGenericParameterCount
+        ? 'declaration'
+        : moduleGenericParameterCount
+          ? 'module'
+          : undefined,
+    },
     children: [],
   };
 }
@@ -1380,6 +1509,7 @@ function createSymbol(
     macroBodyName?: string;
     macroBodyParameters?: C3Parameter[];
     contracts?: C3Contract[];
+    typeInfo?: C3TypeDeclarationInfo;
     scopeRange?: Range;
   },
 ): C3Symbol {
@@ -1402,6 +1532,7 @@ function createSymbol(
     macroBodyName: options.macroBodyName,
     macroBodyParameters: options.macroBodyParameters,
     contracts: options.contracts ?? contractsFor(node),
+    typeInfo: options.typeInfo,
     scopeRange: options.scopeRange,
     children: options.children ?? [],
   };
@@ -1631,6 +1762,7 @@ function contractsFor(node: SyntaxNode): C3Contract[] {
         {
           kind: contractKind(nameNode.text),
           name: nameNode.text,
+          nameRange: rangeFromNode(nameNode),
           range: rangeFromNode(contract),
           expressions: expressionNodes.map((expr) => compactText(expr.text)),
           expressionRanges: expressionNodes.map(rangeFromNode),
@@ -1728,6 +1860,98 @@ function implementedInterfacesFromAggregateHeader(header: string): string[] {
   return splitTopLevelParameters(match.groups.interfaces)
     .map((name) => name.trim())
     .filter(Boolean);
+}
+
+function typeDeclarationInfo(
+  doc: TextDocument,
+  node: SyntaxNode,
+  nameNode: SyntaxNode,
+  kind: C3TypeDeclarationInfo['kind'],
+  moduleGenericParameterCount = 0,
+): C3TypeDeclarationInfo {
+  const ownGenericParameterCount = genericParameterNames(node).length;
+  const genericParameterCount =
+    ownGenericParameterCount || moduleGenericParameterCount;
+
+  return {
+    name: nameNode.text,
+    kind,
+    isGeneric: genericParameterCount > 0,
+    genericParameterCount,
+    range: rangeFromNode(node),
+    selectionRange: rangeFromNode(nameNode),
+    genericSource: ownGenericParameterCount
+      ? 'declaration'
+      : moduleGenericParameterCount
+        ? 'module'
+        : undefined,
+  };
+}
+
+function typeDeclarationKindForNode(
+  node: SyntaxNode,
+): C3TypeDeclarationInfo['kind'] {
+  switch (node.type) {
+    case 'struct_declaration':
+      return declarationKeyword(node) === 'union' ? 'union' : 'struct';
+    case 'bitstruct_declaration':
+      return 'bitstruct';
+    case 'enum_declaration':
+      return 'enum';
+    case 'constdef_declaration':
+      return 'constdef';
+    case 'interface_declaration':
+      return 'interface';
+    case 'alias_declaration':
+      return 'alias';
+    case 'typedef_declaration':
+      return 'typedef';
+    default:
+      return 'builtin';
+  }
+}
+
+function recoveredAggregateTypeKind(
+  keyword: string,
+): C3TypeDeclarationInfo['kind'] {
+  switch (keyword) {
+    case 'union':
+      return 'union';
+    case 'enum':
+      return 'enum';
+    case 'constdef':
+      return 'constdef';
+    default:
+      return 'struct';
+  }
+}
+
+function declarationKeyword(node: SyntaxNode): string | undefined {
+  return node.text
+    .slice(signatureStartIndex(node) - node.startIndex)
+    .match(/^\s*([A-Za-z_][A-Za-z0-9_]*)/)?.[1];
+}
+
+function genericParameterNames(node: SyntaxNode): string[] {
+  const list = directChildOfType(node, 'generic_param_list');
+  if (!list) return [];
+
+  return directChildrenOfTypes(list, ['type_ident', 'const_ident']).map(
+    (child) => child.text,
+  );
+}
+
+function genericParameterCountFromText(text: string | undefined): number {
+  if (!text) return 0;
+
+  const params = text.includes('<')
+    ? text.match(/<(?<params>[^>]*)>/)?.groups?.params
+    : text;
+  if (!params) return 0;
+
+  return splitTopLevelParameters(params)
+    .map((parameter) => parameter.trim())
+    .filter(Boolean).length;
 }
 
 function collectSyntaxDiagnostics(

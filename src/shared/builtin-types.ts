@@ -14,6 +14,7 @@ export const builtinTypeNames = new Set([
   'float',
   'float16',
   'float128',
+  'fault',
   'ichar',
   'int',
   'int128',
@@ -37,6 +38,23 @@ export const builtinTypeNames = new Set([
 const builtinUri = 'c3:/builtin/types';
 const builtinModuleName = 'std::core::builtin';
 const zeroRange = Range.create(0, 0, 0, 0);
+const integerTypeNames = new Set([
+  'char',
+  'ichar',
+  'int',
+  'int128',
+  'iptr',
+  'isz',
+  'long',
+  'short',
+  'sz',
+  'uint',
+  'uint128',
+  'ulong',
+  'uptr',
+  'ushort',
+  'usz',
+]);
 
 const builtinSymbols = new Map<string, C3Symbol>(
   [
@@ -86,6 +104,14 @@ function builtinAggregate(name: string, children: C3Symbol[]): C3Symbol {
         ? 'Builtin fat pointer containing a data pointer and runtime type id.'
         : undefined,
     attributes: ['@builtin'],
+    typeInfo: {
+      name,
+      kind: 'builtin',
+      isGeneric: false,
+      genericParameterCount: 0,
+      range: zeroRange,
+      selectionRange: zeroRange,
+    },
     implementedInterfaces: [],
     parameters: [],
     children,
@@ -101,12 +127,26 @@ function builtinType(name: string): C3Symbol {
     range: zeroRange,
     selectionRange: zeroRange,
     signature: name,
-    documentation: 'Builtin type.',
+    documentation: builtinDocumentation(name),
     attributes: ['@builtin'],
+    typeInfo: {
+      name,
+      kind: 'builtin',
+      isGeneric: false,
+      genericParameterCount: 0,
+      range: zeroRange,
+      selectionRange: zeroRange,
+    },
     implementedInterfaces: [],
     parameters: [],
     children: [],
   };
+}
+
+function builtinDocumentation(name: string): string {
+  if (integerTypeNames.has(name)) return 'Builtin integer type.';
+  if (name === 'fault') return 'Builtin fault type.';
+  return 'Builtin type.';
 }
 
 function builtinField(name: string, returnType: string): C3Symbol {
