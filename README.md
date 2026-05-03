@@ -125,7 +125,9 @@ You can select another project target with initialization options:
 }
 ```
 
-Standard library scanning is opt-in. Provide one or more stdlib source roots
+Standard library scanning is automatic for common local layouts such as a
+workspace-local `c3c/lib` checkout or a configured `c3cPath` inside a C3
+installation. You can also provide one or more stdlib source roots explicitly
 through LSP initialization options:
 
 ```json
@@ -202,7 +204,8 @@ exec node your_path_lsp/dist/server.js "$@"
 Make bash file executable and set **c3 lsp path** your_path_to_bash_file.
 
 If `C3_HOME` or `C3C_HOME` is set, the server tries common library subfolders
-under that root.
+under that root. If only a `c3cPath`/`c3cCommand` is configured, the server also
+searches parent folders for a nearby `lib/std` tree.
 
 When stdlib files use `module ... @if(env::...)`, the index filters branches
 that are definitely inactive for the current host environment. Unknown

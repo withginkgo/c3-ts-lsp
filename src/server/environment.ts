@@ -43,6 +43,8 @@ export function resolveStdlibRoots(
   const configured = [
     ...stdlibPathsFromInitializationOptions(params.initializationOptions),
     ...stdlibPathsFromEnvironment(),
+    ...stdlibPathsFromCompilerConfiguration(params.initializationOptions, root),
+    ...stdlibPathsFromWorkspace(root),
   ];
   const roots: string[] = [];
   const seen = new Set<string>();
@@ -121,6 +123,99 @@ function stdlibPathsFromEnvironment(): string[] {
   return [...direct, ...homes];
 }
 
+function stdlibPathsFromCompilerConfiguration(
+  options: unknown,
+  root: string | null,
+): string[] {
+  const command = compilerCommandFromInitializationOptions(options);
+  if (!command || !/[\\/]/.test(command)) return [];
+
+  const resolved = normalizeConfiguredPath(command, root);
+  if (!resolved) return [];
+
+  return stdlibRootsNearPath(resolved);
+}
+
+function stdlibPathsFromWorkspace(root: string | null): string[] {
+  if (!root) return [];
+
+  return [
+    root,
+    path.join(root, 'lib'),
+    path.join(root, 'c3c', 'lib'),
+    path.join(root, 'vendor', 'c3c', 'lib'),
+    path.join(root, 'third_party', 'c3c', 'lib'),
+    path.join(root, 'deps', 'c3c', 'lib'),
+  ].filter(isLikelyStdlibRoot);
+}
+
+function compilerCommandFromInitializationOptions(
+  options: unknown,
+): string | undefined {
+  if (!options || typeof options !== 'object') return undefined;
+
+  const record = options as Record<string, unknown>;
+  return commandFromConfiguredValue(
+    record.compilerCommand ??
+      record.compilerPath ??
+      record.c3CompilerCommand ??
+      record.c3CompilerPath ??
+      record.c3cCommand ??
+      record.c3cPath ??
+      record['c3.compilerCommand'] ??
+      record['c3.compilerPath'] ??
+      record['c3.c3cCommand'] ??
+      record['c3.c3cPath'],
+  );
+}
+
+function commandFromConfiguredValue(value: unknown): string | undefined {
+  if (typeof value === 'string') return value.trim() || undefined;
+
+  if (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    typeof value[0] === 'string'
+  ) {
+    return value[0].trim() || undefined;
+  }
+
+  if (value && typeof value === 'object') {
+    const command = (value as Record<string, unknown>).command;
+    return typeof command === 'string' ? command.trim() || undefined : undefined;
+  }
+
+  return undefined;
+}
+
+function stdlibRootsNearPath(filePath: string): string[] {
+  const roots: string[] = [];
+  let current = isDirectory(filePath) ? filePath : path.dirname(filePath);
+
+  for (let depth = 0; depth < 8; depth++) {
+    const installedLib = path.join(current, 'lib');
+
+    if (isLikelyStdlibRoot(installedLib)) roots.push(installedLib);
+    if (isLikelyStdlibRoot(current)) roots.push(current);
+
+    const parent = path.dirname(current);
+    if (parent === current) break;
+
+    current = parent;
+  }
+
+  return roots;
+}
+
+function isLikelyStdlibRoot(root: string): boolean {
+  return (
+    fileExists(path.join(root, 'std', 'collections', 'result.c3')) ||
+    fileExists(path.join(root, 'std', 'core', 'builtin.c3')) ||
+    fileExists(path.join(root, 'collections', 'result.c3')) ||
+    fileExists(path.join(root, 'core', 'builtin.c3'))
+  );
+}
+
 function configuredPathValues(value: unknown): string[] {
   if (typeof value === 'string') {
     return value
@@ -155,6 +250,14 @@ function normalizeConfiguredPath(
 function isDirectory(filePath: string): boolean {
   try {
     return fs.statSync(filePath).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function fileExists(filePath: string): boolean {
+  try {
+    return fs.statSync(filePath).isFile();
   } catch {
     return false;
   }

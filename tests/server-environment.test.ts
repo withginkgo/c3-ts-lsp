@@ -78,6 +78,56 @@ test('resolveStdlibRoots accepts C3C_LIB from the compiler environment', () => {
   }
 });
 
+test('resolveStdlibRoots discovers nested c3c lib folders in the workspace', () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'c3-lsp-env-'));
+  const root = path.join(temp, 'workspace');
+  const stdlib = path.join(root, 'c3c', 'lib');
+  const resultFile = path.join(stdlib, 'std', 'collections', 'result.c3');
+
+  fs.mkdirSync(path.dirname(resultFile), { recursive: true });
+  fs.writeFileSync(resultFile, 'module std::collections::result;\n');
+
+  try {
+    const roots = withCleanStdlibEnvironment(() =>
+      resolveStdlibRoots(initializeParams({}), root),
+    );
+
+    assert.deepEqual(roots, [stdlib]);
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test('resolveStdlibRoots derives stdlib roots from configured c3c paths', () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'c3-lsp-env-'));
+  const install = path.join(temp, 'c3');
+  const c3c = path.join(install, 'build', 'bin', 'c3c');
+  const stdlib = path.join(install, 'lib');
+  const resultFile = path.join(stdlib, 'std', 'collections', 'result.c3');
+
+  fs.mkdirSync(path.dirname(c3c), { recursive: true });
+  fs.mkdirSync(path.dirname(resultFile), { recursive: true });
+  fs.writeFileSync(c3c, '');
+  fs.writeFileSync(resultFile, 'module std::collections::result;\n');
+
+  try {
+    const roots = withCleanStdlibEnvironment(() =>
+      resolveStdlibRoots(
+        initializeParams({
+          initializationOptions: {
+            c3cPath: c3c,
+          },
+        }),
+        null,
+      ),
+    );
+
+    assert.deepEqual(roots, [stdlib]);
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
 test('isPathInside treats the parent itself as inside', () => {
   assert.equal(isPathInside('/tmp/project/src/main.c3', '/tmp/project'), true);
   assert.equal(isPathInside('/tmp/project', '/tmp/project'), true);
