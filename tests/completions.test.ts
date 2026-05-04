@@ -3,8 +3,10 @@ import { test } from 'node:test';
 
 import {
   CompletionItemKind,
+  CompletionTriggerKind,
   InsertTextFormat,
   type CompletionItem,
+  type CompletionContext,
 } from 'vscode-languageserver/node.js';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 
@@ -42,6 +44,13 @@ function addResultStdlib(index: ProjectIndex): void {
       { sourceKind: 'stdlib' },
     ),
   );
+}
+
+function dotTriggerContext(): CompletionContext {
+  return {
+    triggerKind: CompletionTriggerKind.TriggerCharacter,
+    triggerCharacter: '.',
+  };
 }
 
 function applyCompletionTextEdit(
@@ -660,6 +669,43 @@ test('completionItems returns struct members after member access', () => {
   );
 });
 
+test('completionItems returns promoted anonymous union fields after member access', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const { doc, parsed, position } = completionFixture(uri, [
+    'module app;',
+    'struct Student {',
+    '    String age;',
+    '    String name;',
+    '}',
+    'struct Result <OkType, ErrType> {',
+    '    union',
+    '    {',
+    '        OkType value;',
+    '        ErrType error;',
+    '    }',
+    '    bool is_ok;',
+    '}',
+    'fn void use() {',
+    '    Result{int, Student} x;',
+    '    x.|',
+    '}',
+    '',
+  ]);
+
+  index.upsert(parsed);
+
+  const items = completionItems(index, doc, parsed, position);
+  const byLabel = new Map(items.map((item) => [item.label, item]));
+
+  assert.equal(byLabel.get('value')?.kind, CompletionItemKind.Field);
+  assert.equal(byLabel.get('value')?.detail, 'int value;');
+  assert.equal(byLabel.get('error')?.kind, CompletionItemKind.Field);
+  assert.equal(byLabel.get('error')?.detail, 'Student error;');
+  assert.equal(byLabel.get('is_ok')?.kind, CompletionItemKind.Field);
+  assert.equal(byLabel.get('is_ok')?.detail, 'bool is_ok;');
+});
+
 test('completionItems returns builtin any members after member access', () => {
   const index = new ProjectIndex();
   const uri = 'file:///workspace/app.c3';
@@ -876,12 +922,12 @@ test('completionItems returns struct initializer fields after designator dot', (
         ? item.textEdit.newText
         : undefined,
     ]),
-    [['.socket', CompletionItemKind.Field, 'Socket socket;', '.socket']],
+    [['socket', CompletionItemKind.Field, 'Socket socket;', 'socket']],
   );
   const edit = items[0]?.textEdit;
   assert.equal(
     edit && 'range' in edit ? doc.getText(edit.range) : undefined,
-    '.so',
+    'so',
   );
   assert.equal(
     items.some((item) => item.label === 'socket_factory'),
@@ -916,11 +962,12 @@ test('completionItems returns struct initializer fields immediately after dot tr
     doc,
     parsed,
     doc.positionAt(source.indexOf('        .') + '        .'.length),
+    dotTriggerContext(),
   );
   const labels = items.map((item) => item.label);
 
-  assert.equal(labels.includes('.socket'), true);
-  assert.equal(labels.includes('.events'), true);
+  assert.equal(labels.includes('socket'), true);
+  assert.equal(labels.includes('events'), true);
   assert.equal(labels.includes('socket_factory'), false);
 });
 
@@ -955,7 +1002,7 @@ test('completionItems infers struct initializer fields from assignment target', 
 
   assert.deepEqual(
     items.map((item) => [item.label, item.kind, item.detail]),
-    [['.socket', CompletionItemKind.Field, 'Socket socket;']],
+    [['socket', CompletionItemKind.Field, 'Socket socket;']],
   );
   assert.equal(
     items.some((item) => item.label === 'socket_factory'),
@@ -993,8 +1040,8 @@ test('completionItems uses explicit initializer type for struct field designator
   assert.deepEqual(
     items.map((item) => [item.label, item.kind, item.detail]),
     [
-      ['.line', CompletionItemKind.Field, 'int line;'],
-      ['.message', CompletionItemKind.Field, 'String message;'],
+      ['line', CompletionItemKind.Field, 'int line;'],
+      ['message', CompletionItemKind.Field, 'String message;'],
     ],
   );
 });
@@ -1041,8 +1088,8 @@ test('completionItems uses return context to infer generic call argument initial
   assert.deepEqual(
     items.map((item) => [item.label, item.kind, item.detail]),
     [
-      ['.line', CompletionItemKind.Field, 'int line;'],
-      ['.message', CompletionItemKind.Field, 'String message;'],
+      ['line', CompletionItemKind.Field, 'int line;'],
+      ['message', CompletionItemKind.Field, 'String message;'],
     ],
   );
 });
@@ -1090,8 +1137,8 @@ test('completionItems uses variable initializer context to infer generic call ar
   assert.deepEqual(
     items.map((item) => [item.label, item.kind, item.detail]),
     [
-      ['.line', CompletionItemKind.Field, 'int line;'],
-      ['.message', CompletionItemKind.Field, 'String message;'],
+      ['line', CompletionItemKind.Field, 'int line;'],
+      ['message', CompletionItemKind.Field, 'String message;'],
     ],
   );
 });
@@ -1115,13 +1162,19 @@ test('completionItems returns fields for an incomplete assignment struct literal
 
   index.upsert(parsed);
 
-  const items = completionItems(index, doc, parsed, position);
+  const items = completionItems(
+    index,
+    doc,
+    parsed,
+    position,
+    dotTriggerContext(),
+  );
 
   assert.deepEqual(
     items.map((item) => [item.label, item.kind, item.detail]),
     [
-      ['.line', CompletionItemKind.Field, 'int line;'],
-      ['.message', CompletionItemKind.Field, 'String message;'],
+      ['line', CompletionItemKind.Field, 'int line;'],
+      ['message', CompletionItemKind.Field, 'String message;'],
     ],
   );
 });
@@ -1146,13 +1199,19 @@ test('completionItems infers return generic argument fields in incomplete struct
   addResultStdlib(index);
   index.upsert(parsed);
 
-  const items = completionItems(index, doc, parsed, position);
+  const items = completionItems(
+    index,
+    doc,
+    parsed,
+    position,
+    dotTriggerContext(),
+  );
 
   assert.deepEqual(
     items.map((item) => [item.label, item.kind, item.detail]),
     [
-      ['.line', CompletionItemKind.Field, 'int line;'],
-      ['.message', CompletionItemKind.Field, 'String message;'],
+      ['line', CompletionItemKind.Field, 'int line;'],
+      ['message', CompletionItemKind.Field, 'String message;'],
     ],
   );
 });
@@ -1177,14 +1236,81 @@ test('completionItems infers variable generic argument fields in incomplete stru
   addResultStdlib(index);
   index.upsert(parsed);
 
-  const items = completionItems(index, doc, parsed, position);
+  const items = completionItems(
+    index,
+    doc,
+    parsed,
+    position,
+    dotTriggerContext(),
+  );
 
   assert.deepEqual(
     items.map((item) => [item.label, item.kind, item.detail]),
     [
-      ['.line', CompletionItemKind.Field, 'int line;'],
-      ['.message', CompletionItemKind.Field, 'String message;'],
+      ['line', CompletionItemKind.Field, 'int line;'],
+      ['message', CompletionItemKind.Field, 'String message;'],
     ],
+  );
+});
+
+test('completionItems handles dot-triggered result error initializer fields', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const { source, doc, parsed, position } = completionFixture(uri, [
+    'module app;',
+    'struct Parse_Error',
+    '{',
+    '    int line;',
+    '    String message;',
+    '}',
+    '',
+    'Result{int, Parse_Error} test = {.is_ok = true, .value = 1};',
+    '',
+    'fn Result{int, Parse_Error} parse_number(String s)',
+    '{',
+    '    int? v = s.to_int();',
+    '    if (catch v) return result::err({.line = 1, .message = string::tformat("not a number: %s", s)});',
+    '    return result::ok(v);',
+    '}',
+    '',
+    'fn int main(String[] args)',
+    '{',
+    '    Result{int, Parse_Error} x = result::err({.|});',
+    '}',
+    '',
+  ]);
+
+  addResultStdlib(index);
+  index.upsert(parsed);
+
+  const items = completionItems(
+    index,
+    doc,
+    parsed,
+    position,
+    dotTriggerContext(),
+  );
+  const message = items.find((item) => item.label === 'message');
+
+  assert.deepEqual(
+    items.map((item) => [item.label, item.kind, item.detail]),
+    [
+      ['line', CompletionItemKind.Field, 'int line;'],
+      ['message', CompletionItemKind.Field, 'String message;'],
+    ],
+  );
+  assert.equal(message?.insertText, 'message');
+  assert.equal(message?.filterText, 'message');
+  assert.equal(
+    message?.textEdit && 'range' in message.textEdit
+      ? doc.getText(message.textEdit.range)
+      : undefined,
+    '',
+  );
+  assert.ok(message);
+  assert.equal(
+    applyCompletionTextEdit(source, doc, message),
+    source.replace('result::err({.});', 'result::err({.message});'),
   );
 });
 
@@ -1222,10 +1348,67 @@ test('completionItems uses open document text for triggered incomplete struct li
   assert.deepEqual(
     items.map((item) => [item.label, item.kind, item.detail]),
     [
-      ['.line', CompletionItemKind.Field, 'int line;'],
-      ['.message', CompletionItemKind.Field, 'String message;'],
+      ['line', CompletionItemKind.Field, 'int line;'],
+      ['message', CompletionItemKind.Field, 'String message;'],
     ],
   );
+});
+
+test('completionItems applies incomplete struct field completion edits', () => {
+  const cases = [
+    {
+      markedLine: '    Parse_Error err = {.|};',
+      completedLine: '    Parse_Error err = {.line};',
+      label: 'line',
+      stdlib: false,
+    },
+    {
+      markedLine: '    Parse_Error err = {.l|};',
+      completedLine: '    Parse_Error err = {.line};',
+      label: 'line',
+      stdlib: false,
+    },
+    {
+      markedLine: '    Result{int, Parse_Error} x = result::err({.|});',
+      completedLine:
+        '    Result{int, Parse_Error} x = result::err({.message});',
+      label: 'message',
+      stdlib: true,
+    },
+  ];
+
+  for (const testCase of cases) {
+    const index = new ProjectIndex();
+    const uri = `file:///workspace/${testCase.label}-${testCase.stdlib}.c3`;
+    const { source, doc, parsed, position } = completionFixture(uri, [
+      'module app;',
+      'struct Parse_Error',
+      '{',
+      '    int line;',
+      '    String message;',
+      '}',
+      'fn int main(String[] args)',
+      '{',
+      testCase.markedLine,
+      '}',
+      '',
+    ]);
+
+    if (testCase.stdlib) addResultStdlib(index);
+    index.upsert(parsed);
+
+    const items = completionItems(index, doc, parsed, position);
+    const item = items.find((candidate) => candidate.label === testCase.label);
+
+    assert.ok(item);
+    assert.equal(
+      applyCompletionTextEdit(source, doc, item),
+      source.replace(
+        testCase.markedLine.replace('|', ''),
+        testCase.completedLine,
+      ),
+    );
+  }
 });
 
 test('completionItems replaces an incomplete field prefix without duplicating text', () => {
@@ -1249,11 +1432,11 @@ test('completionItems replaces an incomplete field prefix without duplicating te
   index.upsert(parsed);
 
   const items = completionItems(index, doc, parsed, position);
-  const line = items.find((item) => item.label === '.line');
+  const line = items.find((item) => item.label === 'line');
 
   assert.deepEqual(
     items.map((item) => [item.label, item.kind, item.detail]),
-    [['.line', CompletionItemKind.Field, 'int line;']],
+    [['line', CompletionItemKind.Field, 'int line;']],
   );
   assert.ok(line);
   assert.equal(
@@ -1287,8 +1470,8 @@ test('completionItems returns semantic fields for manual completion in empty ini
   assert.deepEqual(
     items.map((item) => [item.label, item.kind, item.detail]),
     [
-      ['.line', CompletionItemKind.Field, 'int line;'],
-      ['.message', CompletionItemKind.Field, 'String message;'],
+      ['line', CompletionItemKind.Field, 'int line;'],
+      ['message', CompletionItemKind.Field, 'String message;'],
     ],
   );
 });
@@ -1318,8 +1501,8 @@ test('completionItems infers fields for any struct-typed call argument', () => {
   assert.deepEqual(
     items.map((item) => [item.label, item.kind, item.detail]),
     [
-      ['.age', CompletionItemKind.Field, 'int age;'],
-      ['.name', CompletionItemKind.Field, 'String name;'],
+      ['age', CompletionItemKind.Field, 'int age;'],
+      ['name', CompletionItemKind.Field, 'String name;'],
     ],
   );
 });

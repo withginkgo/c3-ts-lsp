@@ -9,11 +9,18 @@ import type { SyntaxNode } from 'tree-sitter';
 import type { ProjectIndex } from '../project/project-index.js';
 import { isBuiltinTypeName } from '../shared/builtin-types.js';
 import { callableParameters, isCallableSymbol } from '../shared/callable.js';
-import { callTargetFor } from '../shared/calls.js';
-import { isOptionalTypeName, typeNamesCompatible } from '../shared/type-ref.js';
+import { callArguments, callTargetFor } from '../shared/calls.js';
+import {
+  isOptionalTypeName,
+  terminalTypeName,
+  typeNamesCompatible,
+} from '../shared/type-ref.js';
 import type { C3Parameter, C3Symbol, ParsedDocument } from '../shared/types.js';
 import { checkConstExpr, checkGlobalInitExpr } from './const-expr.js';
+import { expectedTypeForExpression } from './expression-context.js';
 import {
+  callArgumentValueNode,
+  comparableTypeCategory,
   expressionTypeName,
   isBoolType,
   rangeFromNode,
@@ -163,6 +170,8 @@ export function expressionDiagnostics(
     ...assignmentDiagnostics(index, parsed),
     ...conditionDiagnostics(index, parsed),
     ...discardedCallResultDiagnostics(index, parsed),
+    ...resultBranchAccessDiagnostics(index, parsed),
+    ...suspiciousStructFieldInitializerDiagnostics(index, parsed),
   ].sort((a, b) => compareRanges(a.range, b.range));
 }
 
@@ -631,6 +640,339 @@ function discardedCallResultDiagnostics(
   return diagnostics;
 }
 
+type ResultBranchState = 'unknown' | 'ok' | 'err';
+
+function resultBranchAccessDiagnostics(
+  index: ProjectIndex,
+  parsed: ParsedDocument,
+): Diagnostic[] {
+  const diagnostics: Diagnostic[] = [];
+
+  for (const access of nodesOfType(parsed.tree.rootNode, 'field_expr')) {
+    const field = access.childForFieldName('field');
+    if (!field || (field.text !== 'value' && field.text !== 'error')) continue;
+    if (isAssignmentTarget(access)) continue;
+
+    const receiver = access.childForFieldName('argument');
+    const variableName = receiver
+      ? simpleIdentifierExpressionName(receiver)
+      : undefined;
+    if (!variableName) continue;
+
+    const state = knownResultBranchStateAt(index, parsed, variableName, access);
+    if (
+      (state === 'err' && field.text !== 'value') ||
+      (state === 'ok' && field.text !== 'error') ||
+      state === 'unknown'
+    ) {
+      continue;
+    }
+
+    const initializer = state === 'err' ? 'result::err' : 'result::ok';
+    diagnostics.push({
+      severity: DiagnosticSeverity.Warning,
+      range: rangeFromNode(field),
+      message: `Possible invalid Result branch access: \`${variableName}\` was initialized with \`${initializer}\`, but \`.${field.text}\` is being read.`,
+      source: diagnosticSource,
+    });
+  }
+
+  return diagnostics;
+}
+
+function knownResultBranchStateAt(
+  index: ProjectIndex,
+  parsed: ParsedDocument,
+  variableName: string,
+  access: SyntaxNode,
+): ResultBranchState {
+  const declaration = nearestVisibleDeclarationBefore(
+    parsed.tree.rootNode,
+    variableName,
+    access,
+  );
+  if (!declaration) return 'unknown';
+
+  const expectedType = declaration.childForFieldName('type')?.text;
+  const initializer = declaration.childForFieldName('right');
+  if (!expectedType || !initializer) return 'unknown';
+
+  const state = resultBranchStateFromInitializer(
+    index,
+    parsed,
+    expectedType,
+    initializer,
+  );
+  if (state === 'unknown') return 'unknown';
+
+  return hasResultStateInvalidationBetween(
+    index,
+    parsed,
+    variableName,
+    declaration.endIndex,
+    access.startIndex,
+    parsed.tree.rootNode,
+  )
+    ? 'unknown'
+    : state;
+}
+
+function nearestVisibleDeclarationBefore(
+  root: SyntaxNode,
+  variableName: string,
+  access: SyntaxNode,
+): SyntaxNode | undefined {
+  const candidates = declarationNodes(root)
+    .filter((declaration) => declaration.endIndex <= access.startIndex)
+    .filter((declaration) => {
+      const name = declaration.childForFieldName('name');
+      if (!name || name.text !== variableName) return false;
+
+      const scope = ancestorOfType(declaration, 'compound_stmt');
+      return !!scope && containsNode(scope, access);
+    })
+    .sort((a, b) => b.startIndex - a.startIndex);
+
+  return candidates[0];
+}
+
+function resultBranchStateFromInitializer(
+  index: ProjectIndex,
+  parsed: ParsedDocument,
+  expectedType: string,
+  initializer: SyntaxNode,
+): ResultBranchState {
+  if (
+    !isResultLikeType(
+      index,
+      parsed,
+      expectedType,
+      rangeFromNode(initializer).start,
+    )
+  ) {
+    return 'unknown';
+  }
+
+  const expression = unwrapExpression(initializer);
+  if (expression.type !== 'call_expr') return 'unknown';
+
+  const functionNode = expression.childForFieldName('function');
+  if (!functionNode) return 'unknown';
+
+  const target = callTargetFor(functionNode);
+  if (!target) return 'unknown';
+
+  const symbol = index.resolveCallableSymbol(
+    parsed.uri,
+    target.ref,
+    target.position,
+  ).selected;
+  if (!symbol || !isCallableSymbol(symbol)) return 'unknown';
+
+  const returnType = symbol.functionType?.returnType ?? symbol.returnType;
+  if (returnType && !typeNamesCompatible(returnType, expectedType)) {
+    return 'unknown';
+  }
+
+  if (symbol.name === 'ok') return 'ok';
+  if (symbol.name === 'err') return 'err';
+  return 'unknown';
+}
+
+function isResultLikeType(
+  index: ProjectIndex,
+  parsed: ParsedDocument,
+  typeName: string,
+  position: Range['start'],
+): boolean {
+  if (terminalTypeName(typeName) !== 'Result') return false;
+
+  const fieldNames = new Set(
+    index
+      .memberSymbolsForType(parsed.uri, typeName, position)
+      .filter((symbol) => symbol.kind === SymbolKind.Field)
+      .map((symbol) => symbol.name),
+  );
+
+  return (
+    fieldNames.has('value') &&
+    fieldNames.has('error') &&
+    fieldNames.has('is_ok')
+  );
+}
+
+function hasResultStateInvalidationBetween(
+  index: ProjectIndex,
+  parsed: ParsedDocument,
+  variableName: string,
+  startIndex: number,
+  endIndex: number,
+  root: SyntaxNode,
+): boolean {
+  for (const node of nodesBetween(root, startIndex, endIndex)) {
+    if (
+      node.type === 'assignment_expr' &&
+      assignmentTargetsVariable(node, variableName)
+    ) {
+      return true;
+    }
+
+    if (
+      node.type === 'unary_expr' &&
+      addressOfTargetsVariable(node, variableName)
+    ) {
+      return true;
+    }
+
+    if (
+      node.type === 'call_expr' &&
+      callMayMutateVariable(index, parsed, node, variableName)
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function assignmentTargetsVariable(
+  assignment: SyntaxNode,
+  variableName: string,
+): boolean {
+  const left =
+    assignment.childForFieldName('left') ?? assignment.namedChildren[0];
+  return !!left && simpleIdentifierExpressionName(left) === variableName;
+}
+
+function addressOfTargetsVariable(
+  expression: SyntaxNode,
+  variableName: string,
+): boolean {
+  if (!expression.text.trimStart().startsWith('&')) return false;
+
+  const argument =
+    expression.childForFieldName('argument') ?? expression.namedChildren[0];
+  return (
+    !!argument && simpleIdentifierExpressionName(argument) === variableName
+  );
+}
+
+function callMayMutateVariable(
+  index: ProjectIndex,
+  parsed: ParsedDocument,
+  call: SyntaxNode,
+  variableName: string,
+): boolean {
+  const args = callArguments(call);
+  const directArgumentIndexes = args.flatMap((arg, index) => {
+    const value = callArgumentValueNode(arg.node);
+    return value && simpleIdentifierExpressionName(value) === variableName
+      ? [index]
+      : [];
+  });
+  if (directArgumentIndexes.length === 0) return false;
+
+  const functionNode = call.childForFieldName('function');
+  const target = functionNode ? callTargetFor(functionNode) : undefined;
+  if (!target) return true;
+
+  const callable = index.resolveCallableSymbol(
+    parsed.uri,
+    target.ref,
+    target.position,
+  ).selected;
+  if (!callable || !isCallableSymbol(callable)) return true;
+
+  const parameters = callableParameters(callable, {
+    methodStyle: target.methodStyle,
+  });
+  return directArgumentIndexes.some((argumentIndex) =>
+    parameterMayMutate(parameters[argumentIndex]),
+  );
+}
+
+function parameterMayMutate(parameter: C3Parameter | undefined): boolean {
+  const label = parameter?.label ?? '';
+  const type = parameter?.type ?? '';
+
+  return (
+    parameter?.receiver === true ||
+    /^&/.test(label.trim()) ||
+    /[*&]/.test(type) ||
+    /\b(?:inout|out)\b/.test(label)
+  );
+}
+
+function suspiciousStructFieldInitializerDiagnostics(
+  index: ProjectIndex,
+  parsed: ParsedDocument,
+): Diagnostic[] {
+  const diagnostics: Diagnostic[] = [];
+
+  for (const element of nodesOfType(
+    parsed.tree.rootNode,
+    'initializer_element',
+  )) {
+    const fieldName = initializerElementFieldName(element);
+    const value = initializerElementValueNode(element);
+    if (!fieldName || !value) continue;
+
+    const expectedType = expectedTypeForExpression(index, parsed, value);
+    const actualType = expressionTypeName(index, parsed, value);
+    if (!expectedType || !actualType) continue;
+    if (!isSuspiciousInitializerType(actualType, expectedType, value)) continue;
+
+    diagnostics.push({
+      severity: DiagnosticSeverity.Warning,
+      range: rangeFromNode(element),
+      message: `Suspicious initializer: field \`${fieldName}\` has type \`${expectedType}\`, but initializer has type \`${actualType}\`.`,
+      source: diagnosticSource,
+    });
+  }
+
+  return diagnostics;
+}
+
+function initializerElementFieldName(element: SyntaxNode): string | undefined {
+  const path = directChildOfType(element, 'param_path');
+  const field = path
+    ?.descendantsOfType('param_path_element')
+    .at(-1)
+    ?.childForFieldName('field');
+
+  return field?.text;
+}
+
+function initializerElementValueNode(
+  element: SyntaxNode,
+): SyntaxNode | undefined {
+  return element.childForFieldName('right') ?? element.namedChildren.at(-1);
+}
+
+function isSuspiciousInitializerType(
+  actualType: string,
+  expectedType: string,
+  expression: SyntaxNode,
+): boolean {
+  if (typeNamesCompatible(actualType, expectedType)) return false;
+
+  const actualCategory = comparableTypeCategory(actualType, expression);
+  const expectedCategory = comparableTypeCategory(expectedType);
+  if (!actualCategory || !expectedCategory) return false;
+  if (
+    isNumericCategory(actualCategory) &&
+    isNumericCategory(expectedCategory)
+  ) {
+    return false;
+  }
+
+  return actualCategory !== expectedCategory;
+}
+
+function isNumericCategory(category: string): boolean {
+  return category === 'integer' || category === 'real';
+}
+
 function hasConcreteInterfaceImplementation(
   index: ProjectIndex,
   parsed: ParsedDocument,
@@ -877,6 +1219,25 @@ function unwrapExpression(expression: SyntaxNode): SyntaxNode {
   return expression;
 }
 
+function simpleIdentifierExpressionName(
+  expression: SyntaxNode,
+): string | undefined {
+  const unwrapped = unwrapExpression(expression);
+  if (unwrapped.type !== 'ident_expr') return undefined;
+  if (unwrapped.namedChildren.length !== 1) return undefined;
+
+  const child = unwrapped.namedChildren[0];
+  return child?.type === 'ident' ? child.text : undefined;
+}
+
+function isAssignmentTarget(expression: SyntaxNode): boolean {
+  const parent = expression.parent;
+  if (parent?.type !== 'assignment_expr') return false;
+
+  const left = parent.childForFieldName('left') ?? parent.namedChildren[0];
+  return !!left && sameSyntaxNode(left, expression);
+}
+
 function containsCallExpression(expression: SyntaxNode): boolean {
   if (expression.type === 'call_expr') return true;
 
@@ -961,6 +1322,29 @@ function containsNode(root: SyntaxNode, target: SyntaxNode): boolean {
   return (
     target.startIndex >= root.startIndex && target.endIndex <= root.endIndex
   );
+}
+
+function nodesBetween(
+  root: SyntaxNode,
+  startIndex: number,
+  endIndex: number,
+): SyntaxNode[] {
+  const found: SyntaxNode[] = [];
+
+  function visit(node: SyntaxNode): void {
+    if (node.endIndex <= startIndex || node.startIndex >= endIndex) return;
+
+    if (node.startIndex >= startIndex && node.endIndex <= endIndex) {
+      found.push(node);
+    }
+
+    for (const child of node.namedChildren) {
+      visit(child);
+    }
+  }
+
+  visit(root);
+  return found;
 }
 
 function rethrowInNonOptionalCallableMessage(

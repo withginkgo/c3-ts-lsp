@@ -72,6 +72,65 @@ test('hover shows owning struct for member symbols', () => {
   assert.match(value, /struct HttpResponse \{\n    String body;\n\}/);
 });
 
+test('hover shows substituted types for promoted anonymous union fields', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'struct Student {',
+    '    String age;',
+    '    String name;',
+    '}',
+    'struct Result <OkType, ErrType> {',
+    '    union',
+    '    {',
+    '        OkType value;',
+    '        ErrType error;',
+    '    }',
+    '    bool is_ok;',
+    '}',
+    'fn void use() {',
+    '    Result{int, Student} x;',
+    '    x.error;',
+    '    x.value;',
+    '    x.is_ok;',
+    '}',
+    '',
+  ].join('\n');
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+
+  index.upsert(parseSource(uri, source));
+
+  const errorHover = hoverFromResolveResult(
+    index,
+    index.resolveSymbol(
+      uri,
+      'error',
+      doc.positionAt(source.indexOf('x.error') + 'x.'.length),
+    ),
+  );
+  const valueHover = hoverFromResolveResult(
+    index,
+    index.resolveSymbol(
+      uri,
+      'value',
+      doc.positionAt(source.indexOf('x.value') + 'x.'.length),
+    ),
+  );
+  const isOkHover = hoverFromResolveResult(
+    index,
+    index.resolveSymbol(
+      uri,
+      'is_ok',
+      doc.positionAt(source.indexOf('x.is_ok') + 'x.'.length),
+    ),
+  );
+
+  assert.match(hoverValue(errorHover), /Student error;/);
+  assert.match(hoverValue(valueHover), /int value;/);
+  assert.match(hoverValue(isOkHover), /bool is_ok;/);
+});
+
 test('hover shows resolved struct type for variables', () => {
   const index = new ProjectIndex();
   const uri = 'file:///workspace/app.c3';

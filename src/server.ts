@@ -335,7 +335,23 @@ connection.onCompletion((params) => {
     );
   }
 
-  return completionItems(projectIndex, doc, current, params.position);
+  const items = completionItems(
+    projectIndex,
+    doc,
+    current,
+    params.position,
+    params.context,
+  );
+
+  if (debugCompletionRequests) {
+    connection.console.log(
+      `completion response items=${items.length} labels=${JSON.stringify(
+        items.slice(0, 10).map((item) => item.label),
+      )}`,
+    );
+  }
+
+  return items;
 });
 
 function refreshProjectModel(): void {

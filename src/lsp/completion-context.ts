@@ -34,6 +34,7 @@ export type CallArgumentContext = {
 
 export type StructInitializerFieldCompletionContext = {
   typeName?: string;
+  designatorDotTyped: boolean;
   prefix: string;
   replaceRange: Range;
 };
@@ -127,19 +128,18 @@ export function structInitializerFieldBeforeCursor(
 
   const entryStart = initializerEntryStart(text, braceOffset, offset);
   const entryText = text.slice(entryStart, offset);
-  const fieldMatch = entryText.match(
-    /^\s*\.\s*([A-Za-z_$@][A-Za-z0-9_$@]*)?$/,
-  );
+  const fieldMatch = entryText.match(/^\s*\.\s*([A-Za-z_$@][A-Za-z0-9_$@]*)?$/);
 
   if (fieldMatch) {
     const prefix = fieldMatch[1] ?? '';
-    const dotOffset = entryStart + entryText.indexOf('.');
+    const prefixStart = offset - prefix.length;
 
     return {
       typeName: initializerTypeBeforeBrace(text, braceOffset) ?? undefined,
+      designatorDotTyped: true,
       prefix,
       replaceRange: {
-        start: doc.positionAt(dotOffset),
+        start: doc.positionAt(prefixStart),
         end: position,
       },
     };
@@ -149,6 +149,7 @@ export function structInitializerFieldBeforeCursor(
 
   return {
     typeName: initializerTypeBeforeBrace(text, braceOffset) ?? undefined,
+    designatorDotTyped: false,
     prefix: '',
     replaceRange: {
       start: position,

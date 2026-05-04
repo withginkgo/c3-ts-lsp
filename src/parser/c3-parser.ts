@@ -581,6 +581,14 @@ function structMemberSymbols(
   const body = node.childForFieldName('body');
   if (!body) return [];
 
+  return structMemberSymbolsFromBody(doc, body, moduleName);
+}
+
+function structMemberSymbolsFromBody(
+  doc: TextDocument,
+  body: SyntaxNode,
+  moduleName: string,
+): C3Symbol[] {
   const symbols: C3Symbol[] = [];
 
   for (const member of directChildrenOfType(
@@ -607,14 +615,25 @@ function structMemberSymbols(
       symbols.push(
         createSymbol(doc, member, nestedName, moduleName, SymbolKind.Struct, {
           bodyNode: nestedBody,
-          children: structMemberSymbols(doc, member, moduleName),
+          children: structMemberSymbolsFromBody(doc, nestedBody, moduleName),
           signature: declarationSignature(member),
         }),
       );
+
+      continue;
+    }
+
+    if (isAnonymousAggregateMember(member) && nestedBody) {
+      symbols.push(...structMemberSymbolsFromBody(doc, nestedBody, moduleName));
     }
   }
 
   return symbols;
+}
+
+function isAnonymousAggregateMember(member: SyntaxNode): boolean {
+  const keyword = declarationKeyword(member);
+  return keyword === 'union' || keyword === 'struct';
 }
 
 function bitstructMemberSymbols(

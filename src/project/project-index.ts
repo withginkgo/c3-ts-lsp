@@ -7,6 +7,7 @@ import {
 import type { SyntaxNode } from 'tree-sitter';
 
 import type {
+  C3Parameter,
   C3Symbol,
   ModuleIndex,
   ParsedDocument,
@@ -23,6 +24,7 @@ import {
   collectionElementTypeName,
   nominalTypeName,
   normalizeTypeName,
+  parseTypeRef,
   terminalTypeName,
 } from '../shared/type-ref.js';
 import {
@@ -1375,9 +1377,22 @@ export class ProjectIndex {
       if (!nominalType) continue;
 
       const typeSymbol = this.resolveTypeSymbol(current, nominalType, position);
+      const typeSubstitution = typeGenericSubstitution(
+        typeSymbol,
+        expandedTypeName,
+      );
       const concreteMembers = [
-        ...(typeSymbol?.children ?? []),
-        ...this.methodSymbolsForTypeName(current, expandedTypeName, typeSymbol),
+        ...instantiateMemberSymbols(
+          [
+            ...(typeSymbol?.children ?? []),
+            ...this.methodSymbolsForTypeName(
+              current,
+              expandedTypeName,
+              typeSymbol,
+            ),
+          ],
+          typeSubstitution,
+        ),
       ];
       const expansionMembers = [
         ...concreteMembers,
@@ -2778,6 +2793,109 @@ function receiverTypeMatches(
     receiver === typeSymbol?.name ||
     terminalTypeName(receiver) === terminalTypeName(target)
   );
+}
+
+function typeGenericSubstitution(
+  typeSymbol: C3Symbol | undefined,
+  typeName: string,
+): Map<string, string> {
+  const params = typeSymbol?.effectiveGenericParams ?? [];
+  if (params.length === 0) return new Map();
+
+  const ref = parseTypeRef(typeName);
+  if (!ref || ref.arguments.length === 0) return new Map();
+
+  const substitution = new Map<string, string>();
+  for (let index = 0; index < params.length; index++) {
+    const arg = ref.arguments[index];
+    if (arg) substitution.set(params[index]!, arg.source);
+  }
+
+  return substitution;
+}
+
+function instantiateMemberSymbols(
+  symbols: C3Symbol[],
+  substitution: Map<string, string>,
+): C3Symbol[] {
+  if (substitution.size === 0) return symbols;
+
+  return symbols.map((symbol) => instantiateMemberSymbol(symbol, substitution));
+}
+
+function instantiateMemberSymbol(
+  symbol: C3Symbol,
+  substitution: Map<string, string>,
+): C3Symbol {
+  return {
+    ...symbol,
+    signature: substituteGenericParams(symbol.signature, substitution),
+    returnType: symbol.returnType
+      ? substituteGenericParams(symbol.returnType, substitution)
+      : undefined,
+    valueType: symbol.valueType
+      ? substituteGenericParams(symbol.valueType, substitution)
+      : undefined,
+    receiverType: symbol.receiverType
+      ? substituteGenericParams(symbol.receiverType, substitution)
+      : undefined,
+    parameters: symbol.parameters.map((parameter) =>
+      substituteGenericParams(parameter, substitution),
+    ),
+    parameterDetails: symbol.parameterDetails?.map((parameter) =>
+      instantiateParameter(parameter, substitution),
+    ),
+    functionType: symbol.functionType
+      ? {
+          ...symbol.functionType,
+          params: symbol.functionType.params.map((parameter) =>
+            instantiateParameter(parameter, substitution),
+          ),
+          returnType: symbol.functionType.returnType
+            ? substituteGenericParams(
+                symbol.functionType.returnType,
+                substitution,
+              )
+            : undefined,
+          receiverType: symbol.functionType.receiverType
+            ? substituteGenericParams(
+                symbol.functionType.receiverType,
+                substitution,
+              )
+            : undefined,
+        }
+      : undefined,
+  };
+}
+
+function instantiateParameter(
+  parameter: C3Parameter,
+  substitution: Map<string, string>,
+): C3Parameter {
+  return {
+    ...parameter,
+    label: substituteGenericParams(parameter.label, substitution),
+    type: parameter.type
+      ? substituteGenericParams(parameter.type, substitution)
+      : undefined,
+  };
+}
+
+function substituteGenericParams(
+  text: string,
+  substitution: Map<string, string>,
+): string {
+  let result = text;
+
+  for (const [param, replacement] of substitution) {
+    const escaped = param.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    result = result.replace(
+      new RegExp(`(^|[^A-Za-z0-9_$@])${escaped}(?=$|[^A-Za-z0-9_$@])`, 'g'),
+      `$1${replacement}`,
+    );
+  }
+
+  return result;
 }
 
 function isTypeSymbol(symbol: C3Symbol): boolean {

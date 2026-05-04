@@ -652,6 +652,95 @@ test('ProjectIndex resolves struct members by receiver type', () => {
   assert.equal(result.selected?.signature, 'String body;');
 });
 
+test('ProjectIndex resolves promoted fields from anonymous union members', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'struct Sample {',
+    '    union',
+    '    {',
+    '        int a;',
+    '        String b;',
+    '    }',
+    '    bool ok;',
+    '}',
+    'fn void use() {',
+    '    Sample sample;',
+    '    sample.a;',
+    '    sample.b;',
+    '    sample.ok;',
+    '}',
+    '',
+  ].join('\n');
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+
+  index.upsert(parseSource(uri, source));
+
+  assert.deepEqual(
+    ['a', 'b', 'ok'].map((name) => {
+      const access = `sample.${name}`;
+      const result = index.resolveSymbol(
+        uri,
+        name,
+        doc.positionAt(source.indexOf(access) + 'sample.'.length),
+      );
+      return [name, result.reason, result.selected?.returnType];
+    }),
+    [
+      ['a', 'resolved', 'int'],
+      ['b', 'resolved', 'String'],
+      ['ok', 'resolved', 'bool'],
+    ],
+  );
+});
+
+test('ProjectIndex substitutes generic parameters for promoted union fields', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'struct Parse_Error {',
+    '    int line;',
+    '    String message;',
+    '}',
+    'struct Result <OkType, ErrType> {',
+    '    union',
+    '    {',
+    '        OkType value;',
+    '        ErrType error;',
+    '    }',
+    '    bool is_ok;',
+    '}',
+    'fn void use() {',
+    '    Result{int, Parse_Error} x;',
+    '    x.error;',
+    '    x.value;',
+    '    x.is_ok;',
+    '}',
+    '',
+  ].join('\n');
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+
+  index.upsert(parseSource(uri, source));
+
+  assert.deepEqual(
+    ['error', 'value', 'is_ok'].map((name) => {
+      const result = index.resolveSymbol(
+        uri,
+        name,
+        doc.positionAt(source.lastIndexOf(name)),
+      );
+      return [name, result.reason, result.selected?.returnType];
+    }),
+    [
+      ['error', 'resolved', 'Parse_Error'],
+      ['value', 'resolved', 'int'],
+      ['is_ok', 'resolved', 'bool'],
+    ],
+  );
+});
+
 test('ProjectIndex resolves struct members through pointer-like receiver types', () => {
   const index = new ProjectIndex();
   const uri = 'file:///workspace/app.c3';

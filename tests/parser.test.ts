@@ -432,6 +432,38 @@ test('parseSource extracts callable parameter metadata', () => {
   );
 });
 
+test('parseSource promotes fields from anonymous union members', () => {
+  const parsed = parseSource(
+    'file:///workspace/anonymous-union.c3',
+    [
+      'module app;',
+      'struct Sample {',
+      '    union',
+      '    {',
+      '        int a;',
+      '        String b;',
+      '    }',
+      '    bool ok;',
+      '}',
+      '',
+    ].join('\n'),
+  );
+  const sample = parsed.symbols.find((symbol) => symbol.name === 'Sample');
+
+  assert.deepEqual(
+    sample?.children.map((symbol) => [
+      symbol.name,
+      symbol.kind,
+      symbol.returnType,
+    ]),
+    [
+      ['a', SymbolKind.Field, 'int'],
+      ['b', SymbolKind.Field, 'String'],
+      ['ok', SymbolKind.Field, 'bool'],
+    ],
+  );
+});
+
 test('parseSource extracts doc contracts and macro trailing body parameters', () => {
   const parsed = parseSource(
     'file:///workspace/app.c3',

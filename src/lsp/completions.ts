@@ -2,6 +2,7 @@ import {
   CompletionItemKind,
   InsertTextFormat,
   SymbolKind,
+  type CompletionContext,
   type CompletionItem,
   type Position,
 } from 'vscode-languageserver/node.js';
@@ -54,6 +55,7 @@ export function completionItems(
   doc: TextDocument | undefined,
   current: ParsedDocument | undefined,
   position: Position,
+  _context?: CompletionContext,
 ): CompletionItem[] {
   if (!doc || !current) return keywordCompletions();
 
@@ -389,16 +391,22 @@ function structInitializerFieldCompletions(
         symbol.kind === SymbolKind.Field &&
         symbol.name.startsWith(context.prefix),
     )
-    .map((symbol) => ({
-      ...memberCompletionItem(symbol),
-      label: `.${symbol.name}`,
-      filterText: symbol.name,
-      sortText: `!${symbol.name}`,
-      textEdit: {
-        range: context.replaceRange,
-        newText: `.${symbol.name}`,
-      },
-    }));
+    .map((symbol) => {
+      const newText = context.designatorDotTyped
+        ? symbol.name
+        : `.${symbol.name}`;
+
+      return {
+        ...memberCompletionItem(symbol),
+        filterText: symbol.name,
+        insertText: newText,
+        sortText: `!${symbol.name}`,
+        textEdit: {
+          range: context.replaceRange,
+          newText,
+        },
+      };
+    });
 }
 
 function expectedInitializerTypeName(
@@ -420,7 +428,15 @@ function expectedInitializerTypeName(
     );
   }
 
-  return expectedTypeForExpression(index, current, initializer);
+  return (
+    expectedTypeForExpression(index, current, initializer) ??
+    expectedInitializerTypeNameFromRepairedDesignator(
+      index,
+      current,
+      position,
+      context,
+    )
+  );
 }
 
 function expectedInitializerTypeNameFromRepairedDesignator(
@@ -433,7 +449,8 @@ function expectedInitializerTypeNameFromRepairedDesignator(
   const end = offsetAtPosition(current.source, position);
   if (start == null || end == null || start > end) return undefined;
 
-  const placeholder = '.__c3_lsp_field';
+  const needsDot = current.source[start - 1] !== '.';
+  const placeholder = `${needsDot ? '.' : ''}__c3_lsp_field`;
   const source = `${current.source.slice(0, start)}${placeholder}${current.source.slice(end)}`;
   const repairedPosition = positionAtOffset(source, start + placeholder.length);
   const repaired = parseSource(current.uri, source, {

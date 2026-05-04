@@ -1,9 +1,37 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
+import { DiagnosticSeverity } from 'vscode-languageserver/node.js';
+
 import { semanticDiagnostics } from '../src/analysis/diagnostics.js';
 import { parseSource } from '../src/parser/c3-parser.js';
 import { ProjectIndex } from '../src/project/project-index.js';
+
+function addResultStdlib(index: ProjectIndex): void {
+  index.upsert(
+    parseSource(
+      'file:///stdlib/std/collections/result.c3',
+      [
+        'module std::collections::result <OkType, ErrType>;',
+        'struct Result (Printable)',
+        '{',
+        '    union',
+        '    {',
+        '        OkType value;',
+        '        ErrType error;',
+        '    }',
+        '    bool is_ok;',
+        '}',
+        'fn Result ok(OkType value) { return {}; }',
+        'fn Result err(ErrType err) { return {}; }',
+        'interface Printable {}',
+        '',
+      ].join('\n'),
+      { sourceKind: 'stdlib' },
+    ),
+    false,
+  );
+}
 
 test('semanticDiagnostics reports unresolved imports', () => {
   const index = new ProjectIndex();
@@ -364,6 +392,256 @@ test('semanticDiagnostics accepts resolved members', () => {
   index.upsert(parsed);
 
   assert.deepEqual(semanticDiagnostics(index, parsed), []);
+});
+
+test('semanticDiagnostics accepts promoted anonymous union fields', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'struct Sample {',
+      '    union',
+      '    {',
+      '        int a;',
+      '        String b;',
+      '    }',
+      '    bool ok;',
+      '}',
+      'fn void use() {',
+      '    Sample sample;',
+      '    sample.a;',
+      '    sample.b;',
+      '    sample.ok;',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(semanticDiagnostics(index, parsed), []);
+});
+
+test('semanticDiagnostics accepts generic promoted anonymous union fields', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'struct Parse_Error {',
+      '    int line;',
+      '    String message;',
+      '}',
+      'struct Result <OkType, ErrType> {',
+      '    union',
+      '    {',
+      '        OkType value;',
+      '        ErrType error;',
+      '    }',
+      '    bool is_ok;',
+      '}',
+      'fn void use() {',
+      '    Result{int, Parse_Error} x;',
+      '    x.error;',
+      '    x.value;',
+      '    x.is_ok;',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(semanticDiagnostics(index, parsed), []);
+});
+
+test('semanticDiagnostics resolves stdlib-style result promoted field access', () => {
+  const index = new ProjectIndex();
+  const app = parseSource(
+    'file:///workspace/app.c3',
+    [
+      'module app;',
+      'import std::collections::result;',
+      'struct Student {',
+      '    String age;',
+      '    String name;',
+      '}',
+      'fn void use() {',
+      '    Result{int, Student} x = result::err({.age = "18", .name = "xiaoming"});',
+      '    x.error;',
+      '    x.value;',
+      '    x.is_ok;',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(app, false);
+  addResultStdlib(index);
+  index.rebuild();
+
+  const diagnostics = semanticDiagnostics(index, app);
+  const messages = diagnostics.map((diagnostic) => diagnostic.message);
+
+  assert.equal(
+    messages.some((message) => message.includes("Unresolved symbol 'value'")),
+    false,
+  );
+  assert.equal(
+    messages.some((message) => message.includes("Unresolved symbol 'error'")),
+    false,
+  );
+  assert.equal(
+    messages.some((message) => message.includes("Unresolved symbol 'is_ok'")),
+    false,
+  );
+  assert.deepEqual(messages, [
+    'Possible invalid Result branch access: `x` was initialized with `result::err`, but `.value` is being read.',
+  ]);
+  assert.equal(diagnostics[0]?.severity, DiagnosticSeverity.Warning);
+});
+
+test('semanticDiagnostics warns on obvious invalid result branch reads', () => {
+  const index = new ProjectIndex();
+  const app = parseSource(
+    'file:///workspace/app.c3',
+    [
+      'module app;',
+      'import std::collections::result;',
+      'struct Student {',
+      '    String age;',
+      '    String name;',
+      '}',
+      'fn void use() {',
+      '    Result{int, Student} from_err = result::err({.age = "18", .name = "xiaoming"});',
+      '    from_err.value;',
+      '    Result{int, Student} from_ok = result::ok(123);',
+      '    from_ok.error;',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(app, false);
+  addResultStdlib(index);
+  index.rebuild();
+
+  assert.deepEqual(
+    semanticDiagnostics(index, app).map((diagnostic) => [
+      diagnostic.severity,
+      diagnostic.message,
+    ]),
+    [
+      [
+        DiagnosticSeverity.Warning,
+        'Possible invalid Result branch access: `from_err` was initialized with `result::err`, but `.value` is being read.',
+      ],
+      [
+        DiagnosticSeverity.Warning,
+        'Possible invalid Result branch access: `from_ok` was initialized with `result::ok`, but `.error` is being read.',
+      ],
+    ],
+  );
+});
+
+test('semanticDiagnostics does not warn on unknown or invalidated result branch state', () => {
+  const index = new ProjectIndex();
+  const app = parseSource(
+    'file:///workspace/app.c3',
+    [
+      'module app;',
+      'import std::collections::result;',
+      'struct Student {',
+      '    String age;',
+      '    String name;',
+      '}',
+      'fn void use() {',
+      '    Result{int, Student} unknown;',
+      '    unknown.value;',
+      '    Result{int, Student} reassigned = result::err({.age = "18", .name = "xiaoming"});',
+      '    reassigned = result::ok(123);',
+      '    reassigned.value;',
+      '    Result{int, Student} escaped = result::err({.age = "18", .name = "xiaoming"});',
+      '    &escaped;',
+      '    escaped.value;',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(app, false);
+  addResultStdlib(index);
+  index.rebuild();
+
+  assert.deepEqual(semanticDiagnostics(index, app), []);
+});
+
+test('semanticDiagnostics warns on suspicious struct field initializer types', () => {
+  const index = new ProjectIndex();
+  const app = parseSource(
+    'file:///workspace/app.c3',
+    [
+      'module app;',
+      'import std::collections::result;',
+      'struct Student {',
+      '    String age;',
+      '    String name;',
+      '}',
+      'fn void use() {',
+      '    Result{int, Student} x = result::err({.age = 1, .name = "xiaoming"});',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(app, false);
+  addResultStdlib(index);
+  index.rebuild();
+
+  const diagnostics = semanticDiagnostics(index, app);
+  assert.equal(
+    diagnostics.some(
+      (diagnostic) => diagnostic.severity === DiagnosticSeverity.Error,
+    ),
+    false,
+  );
+  assert.deepEqual(
+    diagnostics.map((diagnostic) => [diagnostic.severity, diagnostic.message]),
+    [
+      [
+        DiagnosticSeverity.Warning,
+        'Suspicious initializer: field `age` has type `String`, but initializer has type `int`.',
+      ],
+    ],
+  );
+});
+
+test('semanticDiagnostics accepts string struct field initializers', () => {
+  const index = new ProjectIndex();
+  const app = parseSource(
+    'file:///workspace/app.c3',
+    [
+      'module app;',
+      'import std::collections::result;',
+      'struct Student {',
+      '    String age;',
+      '    String name;',
+      '}',
+      'fn void use() {',
+      '    Result{int, Student} x = result::err({.age = "18", .name = "xiaoming"});',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(app, false);
+  addResultStdlib(index);
+  index.rebuild();
+
+  assert.deepEqual(semanticDiagnostics(index, app), []);
 });
 
 test('semanticDiagnostics accepts builtin any ptr and type fields', () => {
@@ -1226,6 +1504,32 @@ test('semanticDiagnostics reports unresolved types and duplicate declarations', 
       "Duplicate parameter 'value' in 'take'",
       "Unresolved type 'Missing'",
     ].sort(),
+  );
+});
+
+test('semanticDiagnostics reports conflicts with promoted anonymous union fields', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'struct Bad {',
+      '    union',
+      '    {',
+      '        int x;',
+      '    }',
+      '    String x;',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(
+    semanticDiagnostics(index, parsed).map((diagnostic) => diagnostic.message),
+    ["Duplicate member 'x' in 'Bad'", "Duplicate member 'x' in 'Bad'"],
   );
 });
 
