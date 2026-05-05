@@ -301,6 +301,50 @@ test('ProjectIndex models builtin any members', () => {
   );
 });
 
+test('ProjectIndex infers compile-time type macro slice returns', () => {
+  const index = new ProjectIndex();
+  const appUri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'struct Conn {}',
+    'fn void use() {',
+    '    Conn[] conns = mem::new_array(Conn, 64);',
+    '    conns.len;',
+    '}',
+    '',
+  ].join('\n');
+  const doc = TextDocument.create(appUri, 'c3', 1, source);
+
+  index.upsert(parseSource(appUri, source), false);
+  index.upsert(
+    parseSource(
+      'file:///stdlib/std/core/mem.c3',
+      [
+        'module std::core::mem;',
+        'macro Type[] new_array($Type type, usz len) {}',
+        '',
+      ].join('\n'),
+      { sourceKind: 'stdlib' },
+    ),
+    false,
+  );
+  index.rebuild();
+
+  assert.equal(
+    index.typeNameForExpression(
+      appUri,
+      'mem::new_array(Conn, 64)',
+      doc.positionAt(source.indexOf('mem::new_array')),
+    ),
+    'Conn[]',
+  );
+  assert.equal(
+    index.resolveSymbol(appUri, 'len', doc.positionAt(source.indexOf('len')))
+      .selected?.returnType,
+    'usz',
+  );
+});
+
 test('ProjectIndex findSymbol ignores unrelated modules', () => {
   const index = new ProjectIndex();
   const appUri = 'file:///workspace/app.c3';

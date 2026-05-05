@@ -15,13 +15,20 @@ import type {
   SourceKind,
 } from '../shared/types.js';
 import {
+  builtinMembersForTypeName,
   builtinOwnerSymbol,
   builtinTypeSymbol,
 } from '../shared/builtin-types.js';
-import { isCallableSymbol } from '../shared/callable.js';
-import { callTargetFor } from '../shared/calls.js';
+import { callableParameters, isCallableSymbol } from '../shared/callable.js';
+import {
+  callArguments,
+  callTargetFor,
+  type C3CallArgument,
+  type C3CallTarget,
+} from '../shared/calls.js';
 import {
   collectionElementTypeName,
+  isArrayLikeTypeName,
   nominalTypeName,
   normalizeTypeName,
   parseTypeRef,
@@ -1103,11 +1110,12 @@ export class ProjectIndex {
       const target = callTargetFor(functionNode);
       if (!target) return undefined;
 
-      return this.resolveCallableSymbol(
-        current.uri,
-        target.ref,
-        target.position,
-      ).selected?.returnType;
+      return this.callExpressionReturnTypeName(
+        current,
+        target,
+        callArguments(expression),
+        position,
+      );
     }
 
     if (expression.type === 'elvis_orelse_expr') {
@@ -1274,8 +1282,12 @@ export class ProjectIndex {
 
     const call = splitCallExpression(text);
     if (call) {
-      return this.resolveCallableSymbol(current.uri, call.functionRef, position)
-        .selected?.returnType;
+      return this.callExpressionReturnTypeNameFromText(
+        current,
+        call.functionRef,
+        call.argsText,
+        position,
+      );
     }
 
     if (isReferenceText(text)) {
@@ -1290,6 +1302,84 @@ export class ProjectIndex {
     }
 
     return undefined;
+  }
+
+  private callExpressionReturnTypeName(
+    current: ParsedDocument,
+    target: C3CallTarget,
+    args: C3CallArgument[],
+    position: Position,
+  ): string | undefined {
+    const callable = this.resolveCallableSymbol(
+      current.uri,
+      target.ref,
+      target.position,
+    ).selected;
+    const returnType = callable?.returnType;
+    if (!callable || !returnType) return returnType;
+
+    const parameters = callableParameters(callable, {
+      methodStyle: target.methodStyle,
+    });
+    const substitution = new Map<string, string>();
+
+    for (
+      let index = 0;
+      index < Math.min(parameters.length, args.length);
+      index++
+    ) {
+      const paramName = compileTimeGenericParamName(parameters[index]?.type);
+      if (!paramName) continue;
+
+      const value = callArgumentValueNode(args[index]!.node);
+      const valueType = value
+        ? this.expressionTypeName(current, value, rangeFromNode(value).start)
+        : undefined;
+      if (valueType) substitution.set(paramName, valueType);
+    }
+
+    return substitution.size > 0
+      ? substituteGenericParams(returnType, substitution)
+      : returnType;
+  }
+
+  private callExpressionReturnTypeNameFromText(
+    current: ParsedDocument,
+    functionRef: string,
+    argsText: string,
+    position: Position,
+  ): string | undefined {
+    const callable = this.resolveCallableSymbol(
+      current.uri,
+      functionRef,
+      position,
+    ).selected;
+    const returnType = callable?.returnType;
+    if (!callable || !returnType) return returnType;
+
+    const parameters = callableParameters(callable);
+    const argTexts = splitTopLevelParameters(argsText);
+    const substitution = new Map<string, string>();
+
+    for (
+      let index = 0;
+      index < Math.min(parameters.length, argTexts.length);
+      index++
+    ) {
+      const paramName = compileTimeGenericParamName(parameters[index]?.type);
+      if (!paramName) continue;
+
+      const valueType = this.baseExpressionTypeNameFromText(
+        current,
+        argTexts[index]!,
+        position,
+      );
+      if (valueType) substitution.set(paramName, valueType);
+    }
+
+    return substitution.size > 0
+      ? substituteGenericParams(returnType, substitution)
+      : returnType;
   }
 
   private foreachVariableTypeName(
@@ -1373,6 +1463,19 @@ export class ProjectIndex {
       typeName,
       position,
     )) {
+      if (isArrayLikeTypeName(expandedTypeName)) {
+        const members = builtinMembersForTypeName(expandedTypeName);
+        symbols.push(
+          ...members.filter((member) => !shadowedNames.has(member.name)),
+        );
+
+        for (const member of members) {
+          shadowedNames.add(member.name);
+        }
+
+        continue;
+      }
+
       const nominalType = nominalTypeName(expandedTypeName);
       if (!nominalType) continue;
 
@@ -2635,6 +2738,58 @@ function splitCallExpression(
   return undefined;
 }
 
+function splitTopLevelParameters(text: string): string[] {
+  const parameters: string[] = [];
+  let depth = 0;
+  let start = 0;
+  let quote: string | undefined;
+  let escaped = false;
+
+  for (let index = 0; index < text.length; index++) {
+    const char = text[index];
+
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+
+      if (quote !== '`' && char === '\\') {
+        escaped = true;
+        continue;
+      }
+
+      if (char === quote) quote = undefined;
+      continue;
+    }
+
+    if (char === '"' || char === "'" || char === '`') {
+      quote = char;
+      continue;
+    }
+
+    if (char === '(' || char === '[' || char === '{') {
+      depth++;
+      continue;
+    }
+
+    if (char === ')' || char === ']' || char === '}') {
+      depth = Math.max(0, depth - 1);
+      continue;
+    }
+
+    if (char !== ',' || depth !== 0) continue;
+
+    const parameter = text.slice(start, index).trim();
+    if (parameter) parameters.push(parameter);
+    start = index + 1;
+  }
+
+  const tail = text.slice(start).trim();
+  if (tail) parameters.push(tail);
+  return parameters;
+}
+
 function splitTopLevelOrelseExpression(
   text: string,
 ): { condition: string; alternative: string } | undefined {
@@ -2881,6 +3036,13 @@ function instantiateParameter(
   };
 }
 
+function compileTimeGenericParamName(
+  typeName: string | undefined,
+): string | undefined {
+  const match = typeName?.trim().match(/^\$([A-Za-z_$@][A-Za-z0-9_$@]*)$/);
+  return match?.[1];
+}
+
 function substituteGenericParams(
   text: string,
   substitution: Map<string, string>,
@@ -2890,12 +3052,23 @@ function substituteGenericParams(
   for (const [param, replacement] of substitution) {
     const escaped = param.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     result = result.replace(
-      new RegExp(`(^|[^A-Za-z0-9_$@])${escaped}(?=$|[^A-Za-z0-9_$@])`, 'g'),
+      new RegExp(`(^|[^A-Za-z0-9_$@])\\$?${escaped}(?=$|[^A-Za-z0-9_$@])`, 'g'),
       `$1${replacement}`,
     );
   }
 
   return result;
+}
+
+function callArgumentValueNode(arg: SyntaxNode): SyntaxNode | undefined {
+  const name = arg.childForFieldName('name');
+
+  return arg.namedChildren.find((child) => {
+    if (!name) return true;
+    return (
+      child.startIndex !== name.startIndex || child.endIndex !== name.endIndex
+    );
+  });
 }
 
 function isTypeSymbol(symbol: C3Symbol): boolean {

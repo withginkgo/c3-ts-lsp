@@ -33,6 +33,22 @@ function addResultStdlib(index: ProjectIndex): void {
   );
 }
 
+function addMemStdlib(index: ProjectIndex): void {
+  index.upsert(
+    parseSource(
+      'file:///stdlib/std/core/mem.c3',
+      [
+        'module std::core::mem;',
+        'macro Type[] new_array($Type type, usz len) {}',
+        'fn void free(void* ptr) {}',
+        '',
+      ].join('\n'),
+      { sourceKind: 'stdlib' },
+    ),
+    false,
+  );
+}
+
 test('semanticDiagnostics reports unresolved imports', () => {
   const index = new ProjectIndex();
   const uri = 'file:///workspace/app.c3';
@@ -392,6 +408,99 @@ test('semanticDiagnostics accepts resolved members', () => {
   index.upsert(parsed);
 
   assert.deepEqual(semanticDiagnostics(index, parsed), []);
+});
+
+test('semanticDiagnostics accepts builtin slice len', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'fn void use() {',
+      '    int[] xs = mem::new_array(int, 10);',
+      '    xs.len;',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed, false);
+  addMemStdlib(index);
+  index.rebuild();
+
+  assert.deepEqual(semanticDiagnostics(index, parsed), []);
+});
+
+test('semanticDiagnostics accepts slice arguments passed to void pointer parameters', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'struct Conn {}',
+      'fn void use() {',
+      '    Conn[] conns = mem::new_array(Conn, 64);',
+      '    mem::free(conns);',
+      '    free(conns);',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed, false);
+  addMemStdlib(index);
+  index.rebuild();
+
+  assert.deepEqual(semanticDiagnostics(index, parsed), []);
+});
+
+test('semanticDiagnostics accepts deferred slice free through void pointer conversion', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'struct Conn {}',
+      'fn void use() {',
+      '    Conn[] conns = mem::new_array(Conn, 64);',
+      '    defer mem::free(conns);',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed, false);
+  addMemStdlib(index);
+  index.rebuild();
+
+  assert.deepEqual(semanticDiagnostics(index, parsed), []);
+});
+
+test('semanticDiagnostics still reports missing len on ordinary structs', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'struct Foo {}',
+      'fn void use() {',
+      '    Foo foo;',
+      '    foo.len;',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(
+    semanticDiagnostics(index, parsed).map((diagnostic) => diagnostic.message),
+    ["Unresolved symbol 'len'"],
+  );
 });
 
 test('semanticDiagnostics accepts promoted anonymous union fields', () => {

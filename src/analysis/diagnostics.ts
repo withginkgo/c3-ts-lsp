@@ -17,7 +17,10 @@ import {
   type C3CallTarget,
 } from '../shared/calls.js';
 import {
+  canImplicitlyConvertType,
+  collectionElementTypeName,
   parseTypeRef,
+  pointerTargetTypeName,
   terminalTypeName,
   typeNamesCompatible,
 } from '../shared/type-ref.js';
@@ -118,7 +121,10 @@ function methodReceiverDiagnostics(parsed: ParsedDocument): Diagnostic[] {
     if (symbol.kind !== SymbolKind.Method || !symbol.receiverType) continue;
 
     const receiver = firstCallableParameter(symbol);
-    if (receiver && typeNamesCompatible(receiver.type, symbol.receiverType)) {
+    if (
+      receiver &&
+      receiverParameterMatches(receiver.type, symbol.receiverType)
+    ) {
       continue;
     }
 
@@ -131,6 +137,17 @@ function methodReceiverDiagnostics(parsed: ParsedDocument): Diagnostic[] {
   }
 
   return diagnostics.sort((a, b) => compareRanges(a.range, b.range));
+}
+
+function receiverParameterMatches(
+  parameterType: string | undefined,
+  receiverType: string | undefined,
+): boolean {
+  if (!parameterType || !receiverType) return false;
+  if (typeNamesCompatible(parameterType, receiverType)) return true;
+
+  const target = pointerTargetTypeName(parameterType);
+  return !!target && typeNamesCompatible(target, receiverType);
 }
 
 function firstCallableParameter(symbol: C3Symbol): C3Parameter | undefined {
@@ -678,6 +695,13 @@ function pushArgumentTypeDiagnostic(
   const actualType = expressionTypeName(index, parsed, value);
   if (
     !actualType ||
+    (parameter.variadic &&
+      parameter.type &&
+      canPassCallArgumentType(
+        actualType,
+        collectionElementTypeName(parameter.type),
+        unresolvedGenericParams,
+      )) ||
     canPassCallArgumentType(actualType, parameter.type, unresolvedGenericParams)
   ) {
     return;
@@ -698,6 +722,7 @@ function canPassCallArgumentType(
 ): boolean {
   if (containsGenericParam(expectedType, unresolvedGenericParams)) return true;
   if (typeNamesCompatible(actualType, expectedType)) return true;
+  if (canImplicitlyConvertType(actualType, expectedType)) return true;
 
   const actualRef = parseTypeRef(actualType);
   const expectedRef = parseTypeRef(expectedType);
@@ -729,7 +754,7 @@ function containsGenericParam(
   for (const param of genericParams) {
     const escaped = param.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     if (
-      new RegExp(`(^|[^A-Za-z0-9_$@])${escaped}(?=$|[^A-Za-z0-9_$@])`).test(
+      new RegExp(`(^|[^A-Za-z0-9_$@])\\$?${escaped}(?=$|[^A-Za-z0-9_$@])`).test(
         typeName,
       )
     ) {

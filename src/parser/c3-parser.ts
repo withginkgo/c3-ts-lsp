@@ -2039,7 +2039,12 @@ function genericParamsForNode(
   declaredGenericParams: string[];
   effectiveGenericParams: string[];
 } {
-  const declaredGenericParams = genericParameterNames(node);
+  const declaredGenericParams = [
+    ...new Set([
+      ...genericParameterNames(node),
+      ...compileTimeTypeParameterNames(node),
+    ]),
+  ];
 
   return {
     moduleGenericParams,
@@ -2049,6 +2054,18 @@ function genericParamsForNode(
       declaredGenericParams,
     ),
   };
+}
+
+function compileTimeTypeParameterNames(node: SyntaxNode): string[] {
+  return callableParameterNodes(node).flatMap((param) => {
+    const type = param.childForFieldName('type');
+    if (!type) return [];
+
+    return descendantsOfType(type, 'ct_type_ident').flatMap((ident) => {
+      const name = ident.text.replace(/^\$/, '');
+      return name ? [name] : [];
+    });
+  });
 }
 
 function effectiveGenericParamsFor(

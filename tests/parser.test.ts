@@ -238,6 +238,27 @@ test('parseSource records module generic params on type and callable symbols', (
   assert.equal(ok?.genericParameterCount, 2);
 });
 
+test('parseSource records compile-time type parameters on macros', () => {
+  const parsed = parseSource(
+    'file:///stdlib/std/core/mem.c3',
+    [
+      'module std::core::mem;',
+      'macro Type[] new_array($Type type, usz len) {}',
+      '',
+    ].join('\n'),
+    { sourceKind: 'stdlib' },
+  );
+  const symbol = parsed.symbols.find(
+    (candidate) => candidate.name === 'new_array',
+  );
+
+  assert.deepEqual(symbol?.declaredGenericParams, ['Type']);
+  assert.deepEqual(symbol?.effectiveGenericParams, ['Type']);
+  assert.equal(symbol?.genericParameterCount, 1);
+  assert.equal(symbol?.returnType, 'Type[]');
+  assert.equal(symbol?.parameterDetails?.[0]?.type, '$Type');
+});
+
 test('parseSource extracts Phase 1 top-level declaration coverage', () => {
   const file = 'testdata/phase1/syntax.c3';
   const parsed = parseSource(

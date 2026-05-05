@@ -5,7 +5,10 @@ import type { ProjectIndex } from '../project/project-index.js';
 import { callArguments, callTargetFor } from '../shared/calls.js';
 import { referenceNarrowedAfterCatch } from '../shared/control-flow.js';
 import {
+  canImplicitlyConvertType,
+  isArrayLikeTypeName,
   isOptionalTypeName,
+  isPointerTypeName,
   nonOptionalTypeName,
   normalizeTypeName,
   optionalTypeName,
@@ -228,6 +231,7 @@ export function shouldReportTypeMismatch(
     return false;
   }
 
+  if (canImplicitlyConvertType(actualType, expectedType)) return false;
   if (typeNamesCompatible(actualType, expectedType)) return false;
 
   const actual = comparableTypeCategory(actualType, expression);
@@ -240,6 +244,9 @@ export function comparableTypeCategory(
   typeName: string,
   expression?: SyntaxNode,
 ): string | undefined {
+  if (isArrayLikeTypeName(typeName)) return 'array';
+  if (isPointerTypeName(typeName)) return 'pointer';
+
   const terminal = terminalTypeName(typeName);
 
   if (terminal === 'any') return undefined;
@@ -276,6 +283,8 @@ export function canPassArgumentType(
   actualType: string,
   expectedType: string,
 ): boolean {
+  if (canImplicitlyConvertType(actualType, expectedType)) return true;
+
   if (
     isOptionalTypeName(actualType) &&
     !isOptionalTypeName(expectedType) &&
@@ -314,12 +323,11 @@ function callExpressionTypeName(
         .selected
     : undefined;
   const returnType =
-    resolved?.returnType ??
     index.typeNameForExpression(
       parsed.uri,
       expression.text,
       rangeFromNode(expression).start,
-    );
+    ) ?? resolved?.returnType;
 
   if (!returnType) return undefined;
   if (isOptionalTypeName(returnType)) return returnType;

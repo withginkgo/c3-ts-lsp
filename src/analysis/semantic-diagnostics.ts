@@ -1099,6 +1099,11 @@ function collectGenericTypeNames(root: SyntaxNode): Set<string> {
     }
   }
 
+  for (const ident of nodesOfType(root, 'ct_type_ident')) {
+    const name = ident.text.replace(/^\$/, '');
+    if (name) names.add(name);
+  }
+
   return names;
 }
 

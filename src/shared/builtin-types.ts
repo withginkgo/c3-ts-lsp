@@ -1,7 +1,7 @@
 import { Range, SymbolKind } from 'vscode-languageserver/node.js';
 
 import type { C3Symbol } from './types.js';
-import { terminalTypeName } from './type-ref.js';
+import { isArrayLikeTypeName, terminalTypeName } from './type-ref.js';
 
 export const builtinTypeNames = new Set([
   'any',
@@ -67,6 +67,7 @@ const builtinSymbols = new Map<string, C3Symbol>(
       .map((name) => builtinType(name)),
   ].map((symbol) => [symbol.name, symbol]),
 );
+const arrayLikeBuiltinMembers = [builtinField('len', 'usz')];
 
 export function isBuiltinTypeName(typeName: string | undefined): boolean {
   return builtinTypeNames.has(terminalTypeName(typeName ?? ''));
@@ -88,6 +89,11 @@ export function builtinOwnerSymbol(symbol: C3Symbol): C3Symbol | undefined {
   }
 
   return undefined;
+}
+
+export function builtinMembersForTypeName(typeName: string): C3Symbol[] {
+  if (isArrayLikeTypeName(typeName)) return arrayLikeBuiltinMembers;
+  return builtinTypeSymbol(typeName)?.children ?? [];
 }
 
 function builtinAggregate(name: string, children: C3Symbol[]): C3Symbol {

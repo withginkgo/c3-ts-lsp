@@ -40,6 +40,43 @@ export function normalizeTypeName(typeName: string): string {
     .trim();
 }
 
+export function isArrayLikeTypeName(typeName: string | undefined): boolean {
+  const shape = typeShape(typeName);
+  return !!shape?.postfixes[0]?.startsWith('[');
+}
+
+export function isSliceTypeName(typeName: string | undefined): boolean {
+  const shape = typeShape(typeName);
+  return shape?.postfixes[0] === '[]';
+}
+
+export function arrayLikeElementTypeName(
+  typeName: string | undefined,
+): string | undefined {
+  const shape = typeShape(typeName);
+  if (!shape?.postfixes[0]?.startsWith('[')) return undefined;
+
+  return typeNameFromShape(shape.base, shape.postfixes.slice(1));
+}
+
+export function isPointerTypeName(typeName: string | undefined): boolean {
+  return typeShape(typeName)?.postfixes[0] === '*';
+}
+
+export function pointerTargetTypeName(
+  typeName: string | undefined,
+): string | undefined {
+  const shape = typeShape(typeName);
+  if (shape?.postfixes[0] !== '*') return undefined;
+
+  return typeNameFromShape(shape.base, shape.postfixes.slice(1));
+}
+
+export function isVoidPointerTypeName(typeName: string | undefined): boolean {
+  const target = pointerTargetTypeName(typeName);
+  return target !== undefined && normalizeTypeName(target) === 'void';
+}
+
 export function isOptionalTypeName(typeName: string | undefined): boolean {
   const text = compactTypeText(typeName ?? '');
   if (!text) return false;
@@ -72,6 +109,9 @@ export function terminalTypeName(typeName: string): string {
 }
 
 export function collectionElementTypeName(typeName: string): string {
+  const arrayElement = arrayLikeElementTypeName(typeName);
+  if (arrayElement) return arrayElement;
+
   const ref = parseTypeRef(typeName);
   if (!ref) return '';
 
@@ -86,14 +126,56 @@ export function typeNamesCompatible(
   actual: string | undefined,
   expected: string | undefined,
 ): boolean {
-  const actualRef = parseTypeRef(actual);
-  const expectedRef = parseTypeRef(expected);
+  const actualShape = typeShape(actual);
+  const expectedShape = typeShape(expected);
+  if (!actualShape || !expectedShape) return false;
+
+  if (
+    typeNameFromShape(actualShape.base, actualShape.postfixes) ===
+    typeNameFromShape(expectedShape.base, expectedShape.postfixes)
+  ) {
+    return true;
+  }
+
+  if (!samePostfixShape(actualShape.postfixes, expectedShape.postfixes)) {
+    return false;
+  }
+
+  const actualRef = parseTypeRef(actualShape.base);
+  const expectedRef = parseTypeRef(expectedShape.base);
   if (!actualRef || !expectedRef) return false;
 
   if (actualRef.normalized === expectedRef.normalized) return true;
   if (actualRef.nominal !== expectedRef.nominal) return false;
 
   return actualRef.arguments.length === 0 || expectedRef.arguments.length === 0;
+}
+
+export function canImplicitlyConvertType(
+  actual: string | undefined,
+  expected: string | undefined,
+): boolean {
+  if (!actual || !expected) return false;
+  if (isOptionalTypeName(actual) || isOptionalTypeName(expected)) {
+    return (
+      isOptionalTypeName(actual) === isOptionalTypeName(expected) &&
+      canImplicitlyConvertType(
+        nonOptionalTypeName(actual),
+        nonOptionalTypeName(expected),
+      )
+    );
+  }
+
+  if (typeNamesCompatible(actual, expected)) return true;
+
+  if (isArrayLikeTypeName(actual)) {
+    const elementType = arrayLikeElementTypeName(actual);
+    if (elementType && canImplicitlyConvertType(`${elementType}*`, expected)) {
+      return true;
+    }
+  }
+
+  return isPointerTypeName(actual) && isVoidPointerTypeName(expected);
 }
 
 function compactTypeText(typeName: string): string {
@@ -119,6 +201,76 @@ function outerOptionalMarker(typeName: string): string | undefined {
   if (marker !== '?' && marker !== '~' && marker !== '!') return undefined;
 
   return marker;
+}
+
+type TypeShape = {
+  base: string;
+  postfixes: string[];
+};
+
+function typeShape(typeName: string | undefined): TypeShape | undefined {
+  let text = removeOuterOptionalMarker(typeName ?? '');
+  if (!text) return undefined;
+
+  const postfixes: string[] = [];
+
+  while (text) {
+    if (text.endsWith('*')) {
+      postfixes.push('*');
+      text = text.slice(0, -1).trim();
+      continue;
+    }
+
+    const array = outerArraySuffix(text);
+    if (array) {
+      postfixes.push(array.suffix);
+      text = array.element.trim();
+      continue;
+    }
+
+    break;
+  }
+
+  return text ? { base: text, postfixes } : undefined;
+}
+
+function typeNameFromShape(base: string, postfixes: string[]): string {
+  return `${base}${[...postfixes].reverse().join('')}`;
+}
+
+function samePostfixShape(a: string[], b: string[]): boolean {
+  return (
+    a.length === b.length && a.every((postfix, index) => postfix === b[index])
+  );
+}
+
+function outerArraySuffix(
+  typeName: string,
+): { element: string; suffix: string } | undefined {
+  if (!typeName.endsWith(']')) return undefined;
+
+  let depth = 0;
+
+  for (let index = typeName.length - 1; index >= 0; index--) {
+    const char = typeName[index];
+
+    if (char === ']') {
+      depth++;
+      continue;
+    }
+
+    if (char !== '[') continue;
+
+    depth--;
+    if (depth !== 0) continue;
+
+    return {
+      element: typeName.slice(0, index),
+      suffix: typeName.slice(index),
+    };
+  }
+
+  return undefined;
 }
 
 function outerGeneric(

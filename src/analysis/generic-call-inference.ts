@@ -3,7 +3,11 @@ import { callableParameters } from '../shared/callable.js';
 import { callArgumentValueNode, expressionTypeName } from './type-analysis.js';
 import type { C3CallArgument, C3CallTarget } from '../shared/calls.js';
 import {
+  arrayLikeElementTypeName,
+  isArrayLikeTypeName,
+  isPointerTypeName,
   parseTypeRef,
+  pointerTargetTypeName,
   typeNamesCompatible,
   type C3TypeRef,
 } from '../shared/type-ref.js';
@@ -212,7 +216,7 @@ export function substituteGenericParams(
   for (const [param, replacement] of substitution) {
     const escaped = param.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     result = result.replace(
-      new RegExp(`(^|[^A-Za-z0-9_$@])${escaped}(?=$|[^A-Za-z0-9_$@])`, 'g'),
+      new RegExp(`(^|[^A-Za-z0-9_$@])\\$?${escaped}(?=$|[^A-Za-z0-9_$@])`, 'g'),
       `$1${replacement}`,
     );
   }
@@ -291,6 +295,34 @@ function unifyTypeNames(
   genericParams: Set<string>,
   substitution: Map<string, string>,
 ): void {
+  if (isArrayLikeTypeName(genericType) && isArrayLikeTypeName(concreteType)) {
+    const genericElement = arrayLikeElementTypeName(genericType);
+    const concreteElement = arrayLikeElementTypeName(concreteType);
+    if (genericElement && concreteElement) {
+      unifyTypeNames(
+        genericElement,
+        concreteElement,
+        genericParams,
+        substitution,
+      );
+    }
+    return;
+  }
+
+  if (isPointerTypeName(genericType) && isPointerTypeName(concreteType)) {
+    const genericTarget = pointerTargetTypeName(genericType);
+    const concreteTarget = pointerTargetTypeName(concreteType);
+    if (genericTarget && concreteTarget) {
+      unifyTypeNames(
+        genericTarget,
+        concreteTarget,
+        genericParams,
+        substitution,
+      );
+    }
+    return;
+  }
+
   const genericRef = parseTypeRef(genericType);
   const concreteRef = parseTypeRef(concreteType);
   if (!genericRef || !concreteRef) return;
@@ -304,8 +336,9 @@ function unifyTypeRefs(
   genericParams: Set<string>,
   substitution: Map<string, string>,
 ): void {
-  if (genericParams.has(genericRef.normalized)) {
-    bindGenericParam(genericRef.normalized, concreteRef.source, substitution);
+  const genericParam = genericParamName(genericRef.normalized, genericParams);
+  if (genericParam) {
+    bindGenericParam(genericParam, concreteRef.source, substitution);
     return;
   }
 
@@ -319,6 +352,18 @@ function unifyTypeRefs(
 
     unifyTypeRefs(genericArg, concreteArg, genericParams, substitution);
   }
+}
+
+function genericParamName(
+  typeName: string,
+  genericParams: Set<string>,
+): string | undefined {
+  if (genericParams.has(typeName)) return typeName;
+
+  const withoutCompileTimeMarker = typeName.replace(/^\$/, '');
+  return genericParams.has(withoutCompileTimeMarker)
+    ? withoutCompileTimeMarker
+    : undefined;
 }
 
 function bindGenericParam(
