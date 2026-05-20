@@ -277,3 +277,80 @@ test('signatureHelp resolves generic method-style calls and skips receiver param
     ['sz index', 'Type type'],
   );
 });
+
+test('signatureHelp shows macro trailing body parameters after semicolons', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'macro void @with(int x; @body(int y)) {',
+    '    @body(x);',
+    '}',
+    'fn void use() {',
+    '    @with(1; int y) {',
+    '        y;',
+    '    };',
+    '}',
+    '',
+  ].join('\n');
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+  const parsed = parseSource(uri, source);
+
+  index.upsert(parsed);
+
+  const regularArgHelp = signatureHelp(
+    index,
+    doc,
+    parsed,
+    doc.positionAt(source.indexOf('1; int y')),
+  );
+  const bodyArgHelp = signatureHelp(
+    index,
+    doc,
+    parsed,
+    doc.positionAt(source.lastIndexOf('int y')),
+  );
+
+  assert.equal(regularArgHelp?.activeParameter, 0);
+  assert.equal(bodyArgHelp?.activeParameter, 1);
+  assert.equal(
+    bodyArgHelp?.signatures[0]?.label,
+    'macro void @with(int x; @body(int y))',
+  );
+  assert.deepEqual(
+    bodyArgHelp?.signatures[0]?.parameters?.map((parameter) => parameter.label),
+    ['int x', '@body(int y)'],
+  );
+});
+
+test('signatureHelp handles incomplete macro body argument lists', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const source = [
+    'module app;',
+    'macro void @with(int x; @body(int y)) {',
+    '    @body(x);',
+    '}',
+    'fn void use() {',
+    '    @with(1; ',
+    '}',
+    '',
+  ].join('\n');
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+  const parsed = parseSource(uri, source);
+
+  index.upsert(parsed);
+
+  const help = signatureHelp(
+    index,
+    doc,
+    parsed,
+    doc.positionAt(source.indexOf('@with(1; ') + '@with(1; '.length),
+  );
+
+  assert.equal(help?.activeParameter, 1);
+  assert.deepEqual(
+    help?.signatures[0]?.parameters?.map((parameter) => parameter.label),
+    ['int x', '@body(int y)'],
+  );
+});

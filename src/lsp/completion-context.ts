@@ -213,7 +213,8 @@ export function moduleNamespaceCompletionBeforeCursor(
   const identifier = identifierEndingAt(root, position);
   if (!identifier) return null;
 
-  const context = qualifiedIdentifierContext(identifier);
+  const context =
+    qualifiedIdentifierContext(identifier) ?? typeAccessIdentifierContext(identifier);
   if (!context) return null;
 
   return {
@@ -474,6 +475,40 @@ function nearestQualifiedIdentifierOwner(node: SyntaxNode): SyntaxNode | null {
       return current;
     }
 
+    current = current.parent;
+  }
+
+  return null;
+}
+
+function typeAccessIdentifierContext(
+  identifier: SyntaxNode,
+): { prefix: string } | null {
+  const access =
+    identifier.type === 'access_ident'
+      ? identifier
+      : identifier.parent?.type === 'access_ident'
+        ? identifier.parent
+        : null;
+  if (!access) return null;
+
+  const owner = nearestAncestorOfType(access, 'type_access_expr');
+  const field = owner?.childForFieldName('field');
+  const argument = owner?.childForFieldName('argument');
+
+  if (!field || !argument || !sameSyntaxNode(field, access)) return null;
+
+  return { prefix: argument.text };
+}
+
+function nearestAncestorOfType(
+  node: SyntaxNode,
+  type: string,
+): SyntaxNode | null {
+  let current: SyntaxNode | null = node.parent;
+
+  while (current) {
+    if (current.type === type) return current;
     current = current.parent;
   }
 

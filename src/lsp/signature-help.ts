@@ -46,7 +46,7 @@ export function signatureHelp(
 
   if (callables.length === 0) return null;
 
-  const firstParameters = callableParameters(callables[0]!, {
+  const firstParameters = signatureHelpParameters(callables[0]!, {
     methodStyle: callTarget.methodStyle,
   });
   const activeParameter = activeParameterIndex(
@@ -81,7 +81,7 @@ function signatureHelpFromTextContext(
   );
   if (callables.length === 0) return null;
 
-  const firstParameters = callableParameters(callables[0]!, { methodStyle });
+  const firstParameters = signatureHelpParameters(callables[0]!, { methodStyle });
 
   return {
     signatures: callables.map((symbol) =>
@@ -93,6 +93,36 @@ function signatureHelpFromTextContext(
       firstParameters,
     ),
   };
+}
+
+function signatureHelpParameters(
+  symbol: C3Symbol,
+  options: { methodStyle?: boolean } = {},
+): C3Parameter[] {
+  const regular = callableParameters(symbol, options);
+
+  if (!symbol.macroBodyName) return regular;
+
+  return [...regular, macroBodyParameterEntry(symbol)];
+}
+
+function macroBodyParameterEntry(symbol: C3Symbol): C3Parameter {
+  return {
+    label: macroBodyParameterLabel(symbol),
+    name: symbol.macroBodyName!,
+    optional: false,
+    variadic: false,
+    receiver: false,
+  };
+}
+
+function macroBodyParameterLabel(symbol: C3Symbol): string {
+  const parameters = symbol.macroBodyParameters ?? [];
+  if (parameters.length === 0) return symbol.macroBodyName!;
+
+  return `${symbol.macroBodyName!}(${parameters
+    .map((parameter) => parameter.label)
+    .join(', ')})`;
 }
 
 function callablesForTarget(
@@ -156,8 +186,8 @@ function signatureInformation(
   return {
     label: symbol.signature,
     documentation: symbol.documentation,
-    parameters: callableParameters(symbol, { methodStyle }).map((parameter) =>
-      ParameterInformation.create(parameter.label),
+    parameters: signatureHelpParameters(symbol, { methodStyle }).map(
+      (parameter) => ParameterInformation.create(parameter.label),
     ),
   };
 }
@@ -208,8 +238,39 @@ function activeParameterIndex(
   const start = args.startIndex + 1;
   if (offset <= start) return 0;
 
-  const index = countTopLevelCommas(doc.getText().slice(start, offset));
+  const text = doc.getText().slice(start, offset);
+  const semicolonIndex = topLevelCharIndex(text, ';');
+  const preCount = preParamsCount(parameters);
+  const index =
+    semicolonIndex >= 0
+      ? preCount + countTopLevelCommas(text.slice(semicolonIndex + 1))
+      : countTopLevelCommas(text);
+
   return parameters.length > 0 ? Math.min(index, parameters.length - 1) : 0;
+}
+
+function preParamsCount(parameters: C3Parameter[]): number {
+  const bodyIndex = parameters.findIndex(
+    (parameter) => parameter.label.startsWith('@'),
+  );
+  return bodyIndex >= 0 ? bodyIndex : parameters.length;
+}
+
+function topLevelCharIndex(text: string, char: string): number {
+  let depth = 0;
+
+  for (let index = 0; index < text.length; index++) {
+    const ch = text[index];
+    if (ch === '(' || ch === '[' || ch === '{') {
+      depth++;
+    } else if (ch === ')' || ch === ']' || ch === '}') {
+      depth = Math.max(0, depth - 1);
+    } else if (ch === char && depth === 0) {
+      return index;
+    }
+  }
+
+  return -1;
 }
 
 function activeParameterIndexFromText(
@@ -226,7 +287,13 @@ function activeParameterIndexFromText(
     if (namedIndex >= 0) return namedIndex;
   }
 
-  const index = countTopLevelCommas(argumentsText);
+  const semicolonIndex = topLevelCharIndex(argumentsText, ';');
+  const preParams = preParamsCount(parameters);
+  const index =
+    semicolonIndex >= 0
+      ? preParams + countTopLevelCommas(argumentsText.slice(semicolonIndex + 1))
+      : countTopLevelCommas(argumentsText);
+
   return parameters.length > 0 ? Math.min(index, parameters.length - 1) : 0;
 }
 

@@ -15,9 +15,15 @@ import type {
   SourceKind,
 } from '../shared/types.js';
 import {
+  C3_REFLECTION_MEMBER_SEQUENCE_TYPE,
   builtinMembersForTypeName,
   builtinOwnerSymbol,
   builtinTypeSymbol,
+  compileTimeEvalSelectorSymbol,
+  isReflectionMemberDescriptorTypeName,
+  isReflectionTypeParameterTypeName,
+  reflectionMemberDescriptorMembers,
+  reflectionTypeAccessMembers,
 } from '../shared/builtin-types.js';
 import { callableParameters, isCallableSymbol } from '../shared/callable.js';
 import {
@@ -32,6 +38,7 @@ import {
   nominalTypeName,
   normalizeTypeName,
   parseTypeRef,
+  sliceTypeName,
   terminalTypeName,
 } from '../shared/type-ref.js';
 import {
@@ -397,6 +404,10 @@ export class ProjectIndex {
     const current = this.parsedByUri.get(currentUri);
     if (!current) return { candidates: [], reason: 'not_found' };
 
+    if (ref === '$eval' && accessEvalSelectorAt(current, position)) {
+      return this.resultFromCandidates([compileTimeEvalSelectorSymbol()]);
+    }
+
     const memberCandidates = this.memberSymbolCandidatesAt(
       current,
       ref,
@@ -405,6 +416,16 @@ export class ProjectIndex {
 
     if (memberCandidates) {
       return this.resultFromCandidates(memberCandidates);
+    }
+
+    const typeAccessCandidates = this.reflectionTypeAccessSymbolCandidatesAt(
+      current,
+      ref,
+      position,
+    );
+
+    if (typeAccessCandidates && typeAccessCandidates.length > 0) {
+      return this.resultFromCandidates(typeAccessCandidates);
     }
 
     if (ref.includes('::')) {
@@ -451,6 +472,12 @@ export class ProjectIndex {
     }
 
     const prefix = parts.slice(0, segmentIndex + 1).join('::');
+
+    if (this.isReflectionTypeReceiver(current, prefix, position)) {
+      const symbol = this.resolveSymbol(currentUri, prefix, position).selected;
+      if (symbol) return this.resultFromCandidates([symbol]);
+    }
+
     const moduleSymbol = this.moduleSymbolForPrefix(current, prefix, position);
 
     return this.resultFromCandidates(moduleSymbol ? [moduleSymbol] : []);
@@ -584,6 +611,18 @@ export class ProjectIndex {
         this.resolveModuleFromPrefix(current, prefix),
         current.moduleName,
       ),
+    ).sort(compareSymbols);
+  }
+
+  typeAccessMemberSymbols(
+    current: ParsedDocument,
+    receiverExpression: string,
+    position: Position,
+  ): C3Symbol[] {
+    return this.reflectionTypeAccessSymbolsForReceiver(
+      current,
+      receiverExpression,
+      position,
     ).sort(compareSymbols);
   }
 
@@ -1047,6 +1086,64 @@ export class ProjectIndex {
     );
   }
 
+  private reflectionTypeAccessSymbolCandidatesAt(
+    current: ParsedDocument,
+    ref: string,
+    position: Position,
+  ): C3Symbol[] | undefined {
+    const typeAccess = typeAccessExpressionAt(current, ref, position);
+
+    if (typeAccess) {
+      const argument = typeAccess.childForFieldName('argument');
+      if (!argument) return [];
+
+      return this.reflectionTypeAccessSymbolsForReceiver(
+        current,
+        argument.text,
+        rangeFromNode(argument).start,
+      ).filter((symbol) => symbol.name === ref);
+    }
+
+    const qualified = splitQualifiedRef(ref);
+    if (!qualified) return undefined;
+
+    const symbols = this.reflectionTypeAccessSymbolsForReceiver(
+      current,
+      qualified.receiver,
+      position,
+    ).filter((symbol) => symbol.name === qualified.member);
+
+    return symbols.length > 0 ? symbols : undefined;
+  }
+
+  private reflectionTypeAccessSymbolsForReceiver(
+    current: ParsedDocument,
+    receiverExpression: string,
+    position: Position,
+  ): C3Symbol[] {
+    return this.isReflectionTypeReceiver(current, receiverExpression, position)
+      ? reflectionTypeAccessMembers()
+      : [];
+  }
+
+  private isReflectionTypeReceiver(
+    current: ParsedDocument,
+    receiverExpression: string,
+    position: Position,
+  ): boolean {
+    const text = receiverExpression.trim();
+    if (!text) return false;
+
+    const resolved = this.resolveSymbol(current.uri, text, position).selected;
+    if (isReflectionTypeParameterTypeName(resolved?.returnType)) return true;
+    if (resolved?.kind === SymbolKind.TypeParameter && resolved.name.startsWith('$')) {
+      return true;
+    }
+    if (this.resolveTypeSymbol(current, text, position)) return true;
+
+    return /^\$[A-Za-z_][A-Za-z0-9_$@]*(?:\([^\n]*\))?$/.test(text);
+  }
+
   private memberSymbolCandidatesAt(
     current: ParsedDocument,
     ref: string,
@@ -1076,6 +1173,23 @@ export class ProjectIndex {
 
     if (expression.type === 'type') {
       return expression.text;
+    }
+
+    if (expression.type === 'type_access_expr') {
+      const field = expression.childForFieldName('field');
+      const argument = expression.childForFieldName('argument');
+
+      if (
+        field?.text === 'members' &&
+        argument &&
+        this.isReflectionTypeReceiver(
+          current,
+          argument.text,
+          rangeFromNode(argument).start,
+        )
+      ) {
+        return C3_REFLECTION_MEMBER_SEQUENCE_TYPE;
+      }
     }
 
     if (expression.type === 'ident_expr') {
@@ -1134,6 +1248,7 @@ export class ProjectIndex {
     if (expression.type === 'field_expr') {
       const field = expression.childForFieldName('field');
       if (!field) return undefined;
+      if (isAccessEvalSelector(field)) return 'any';
 
       const member = this.memberSymbolCandidatesAt(
         current,
@@ -1149,7 +1264,13 @@ export class ProjectIndex {
       if (!argument) return undefined;
 
       const indexedType = this.expressionTypeName(current, argument, position);
-      return indexedType ? collectionElementTypeName(indexedType) : undefined;
+      if (!indexedType) return undefined;
+
+      if (expression.childForFieldName('range')) {
+        return sliceTypeName(indexedType) ?? collectionElementTypeName(indexedType);
+      }
+
+      return collectionElementTypeName(indexedType);
     }
 
     if (expression.type === 'paren_expr') {
@@ -1203,14 +1324,21 @@ export class ProjectIndex {
       const memberAccess = parseMemberSegment(part);
       if (!memberAccess) return undefined;
 
+      if (memberAccess.name === '$eval') {
+        typeName = 'any';
+        continue;
+      }
+
       const member = this.membersForTypeName(current, typeName, position).find(
         (candidate) => candidate.name === memberAccess.name,
       );
 
       typeName = member?.returnType;
 
-      if (typeName && memberAccess.indexed) {
-        typeName = collectionElementTypeName(typeName);
+      if (typeName && memberAccess.indexText !== undefined) {
+        typeName = isRangeSubscript(memberAccess.indexText)
+          ? sliceTypeName(typeName) ?? collectionElementTypeName(typeName)
+          : collectionElementTypeName(typeName);
       }
     }
 
@@ -1277,7 +1405,13 @@ export class ProjectIndex {
         subscript.base,
         position,
       );
-      return baseType ? collectionElementTypeName(baseType) : undefined;
+      if (!baseType) return undefined;
+
+      if (isRangeSubscript(subscript.indexText)) {
+        return sliceTypeName(baseType) ?? collectionElementTypeName(baseType);
+      }
+
+      return collectionElementTypeName(baseType);
     }
 
     const call = splitCallExpression(text);
@@ -1455,6 +1589,10 @@ export class ProjectIndex {
     typeName: string,
     position: Position,
   ): C3Symbol[] {
+    if (isReflectionMemberDescriptorTypeName(typeName)) {
+      return reflectionMemberDescriptorMembers().sort(compareSymbols);
+    }
+
     const symbols: C3Symbol[] = [];
     const shadowedNames = new Set<string>();
 
@@ -2435,13 +2573,32 @@ function foreachVariableCandidatesAt(
         const name = directChildOfType(variable, 'ident');
         if (name?.text !== ref) continue;
 
-        const owner =
-          ancestorOfType(node, 'foreach_stmt') ?? node.parent ?? node;
+        const owner = ancestorOfType(node, 'foreach_stmt') ?? node.parent ?? node;
 
         candidates.push({
           condition: node,
           variable,
           role: foreachVariableRole(node, variable),
+          scopeRange: rangeFromNode(owner),
+        });
+      }
+    }
+
+    if (
+      node.type === 'ct_foreach_cond' &&
+      foreachConditionVisibleAt(node, position)
+    ) {
+      for (const fieldName of ['index', 'value'] as const) {
+        const variable = node.childForFieldName(fieldName);
+        if (variable?.text !== ref) continue;
+
+        const owner =
+          ancestorOfType(node, 'ct_foreach_stmt') ?? node.parent ?? node;
+
+        candidates.push({
+          condition: node,
+          variable,
+          role: fieldName,
           scopeRange: rangeFromNode(owner),
         });
       }
@@ -2472,7 +2629,10 @@ function foreachConditionVisibleAt(
     return false;
   }
 
-  const owner = ancestorOfType(condition, 'foreach_stmt') ?? condition.parent;
+  const owner =
+    ancestorOfType(condition, 'foreach_stmt') ??
+    ancestorOfType(condition, 'ct_foreach_stmt') ??
+    condition.parent;
   if (!owner) return false;
 
   const body = owner.childForFieldName('body');
@@ -2580,6 +2740,26 @@ function hasAttribute(node: SyntaxNode, name: string): boolean {
   return false;
 }
 
+function accessEvalSelectorAt(
+  parsed: ParsedDocument,
+  position: Position,
+): SyntaxNode | undefined {
+  const node = parsed.tree.rootNode.descendantForPosition({
+    row: position.line,
+    column: position.character,
+  });
+  const evalNode = ancestorOfType(node, 'access_eval');
+  if (!evalNode) return undefined;
+
+  const fieldExpr = ancestorOfType(evalNode, 'field_expr');
+  const field = fieldExpr?.childForFieldName('field');
+  return field && isAccessEvalSelector(field) ? evalNode : undefined;
+}
+
+function isAccessEvalSelector(field: SyntaxNode): boolean {
+  return field.type === 'access_eval' || !!directChildOfType(field, 'access_eval');
+}
+
 function fieldExpressionAt(
   parsed: ParsedDocument,
   ref: string,
@@ -2606,6 +2786,45 @@ function fieldExpressionAt(
   }
 
   return fieldExpr;
+}
+
+function typeAccessExpressionAt(
+  parsed: ParsedDocument,
+  ref: string,
+  position: Position,
+): SyntaxNode | undefined {
+  const node = parsed.tree.rootNode.descendantForPosition({
+    row: position.line,
+    column: position.character,
+  });
+  const fieldNode = ancestorOfType(node, 'access_ident');
+
+  if (!fieldNode || fieldNode.text !== ref) return undefined;
+
+  const typeAccess = ancestorOfType(fieldNode, 'type_access_expr');
+  if (!typeAccess) return undefined;
+
+  const field = typeAccess.childForFieldName('field');
+  if (
+    !field ||
+    field.startIndex !== fieldNode.startIndex ||
+    field.endIndex !== fieldNode.endIndex
+  ) {
+    return undefined;
+  }
+
+  return typeAccess;
+}
+
+function splitQualifiedRef(
+  ref: string,
+): { receiver: string; member: string } | undefined {
+  const separator = ref.lastIndexOf('::');
+  if (separator < 0) return undefined;
+
+  const receiver = ref.slice(0, separator).trim();
+  const member = ref.slice(separator + 2).trim();
+  return receiver && member ? { receiver, member } : undefined;
 }
 
 function ancestorOfType(
@@ -2677,14 +2896,14 @@ function splitMemberExpression(expressionText: string): string[] {
 
 function parseMemberSegment(
   segment: string,
-): { name: string; indexed: boolean } | undefined {
+): { name: string; indexText?: string } | undefined {
   const text = segment.trim();
   const call = splitCallExpression(text);
-  const indexed = !!splitTrailingSubscript(call?.functionRef ?? text);
-  const base = splitTrailingSubscript(call?.functionRef ?? text)?.base ?? text;
+  const subscript = splitTrailingSubscript(call?.functionRef ?? text);
+  const base = subscript?.base ?? text;
   const name = base.match(/^[A-Za-z_$@][A-Za-z0-9_$@]*/)?.[0];
 
-  return name ? { name, indexed } : undefined;
+  return name ? { name, indexText: subscript?.indexText } : undefined;
 }
 
 function splitTrailingSubscript(
@@ -2709,6 +2928,10 @@ function splitTrailingSubscript(
   }
 
   return undefined;
+}
+
+function isRangeSubscript(indexText: string): boolean {
+  return /^\s*$|:/.test(indexText) || indexText.includes('..');
 }
 
 function splitCallExpression(

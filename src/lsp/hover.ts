@@ -7,8 +7,9 @@ import {
 import type { SyntaxNode } from 'tree-sitter';
 
 import type { ProjectIndex } from '../project/project-index.js';
+import { C3_REFLECTION_MEMBER_DESCRIPTOR_TYPE } from '../shared/builtin-types.js';
 import { callableParameters, isCallableSymbol } from '../shared/callable.js';
-import { callTargetFor } from '../shared/calls.js';
+import { callArguments, callTargetFor } from '../shared/calls.js';
 import { parseTypeRef } from '../shared/type-ref.js';
 import type { C3Symbol, ResolveResult } from '../shared/types.js';
 
@@ -50,8 +51,11 @@ export function symbolHover(
     ? index.typeSymbolFor(symbol)
     : undefined;
 
-  if (symbol.documentation) {
-    sections.push(symbol.documentation);
+  const documentation =
+    reflectionTagDocumentation(index, symbol, context) ?? symbol.documentation;
+
+  if (documentation) {
+    sections.push(documentation);
   }
 
   if (owner) {
@@ -97,6 +101,58 @@ export function ambiguousHover(candidates: C3Symbol[]): Hover {
       ].join('\n'),
     },
   };
+}
+
+function reflectionTagDocumentation(
+  index: ProjectIndex,
+  symbol: C3Symbol,
+  context: HoverContext,
+): string | undefined {
+  if (symbol.receiverType !== C3_REFLECTION_MEMBER_DESCRIPTOR_TYPE) {
+    return undefined;
+  }
+
+  if (symbol.name !== 'has_tag' && symbol.name !== 'get_tag') return undefined;
+  if (!context.currentUri || !context.position) return undefined;
+
+  const tagName = reflectionTagArgument(index, symbol, {
+    currentUri: context.currentUri,
+    position: context.position,
+  });
+  if (!tagName) return undefined;
+
+  return symbol.name === 'has_tag'
+    ? `Checks whether the current member has a compile-time custom attribute/tag named \`${tagName}\`.`
+    : `Retrieves the compile-time tag value associated with \`${tagName}\`.`;
+}
+
+function reflectionTagArgument(
+  index: ProjectIndex,
+  symbol: C3Symbol,
+  context: { currentUri: string; position: Position },
+): string | undefined {
+  const parsed = index.getParsed(context.currentUri);
+  if (!parsed) return undefined;
+
+  const node = parsed.tree.rootNode.descendantForPosition({
+    row: context.position.line,
+    column: context.position.character,
+  });
+  const call = ancestorOfType(node, 'call_expr');
+  const functionNode = call?.childForFieldName('function');
+  if (!call || !functionNode) return undefined;
+
+  const target = callTargetFor(functionNode);
+  if (target?.ref !== symbol.name) return undefined;
+
+  const firstArg = callArguments(call)[0]?.node.namedChildren.find(
+    (child) =>
+      child.type === 'string_literal' ||
+      child.type === 'raw_string_literal' ||
+      child.type === 'string_expr',
+  );
+
+  return firstArg?.text.replace(/^"|"$/g, '').replace(/^`|`$/g, '');
 }
 
 function formatPrimarySymbol(

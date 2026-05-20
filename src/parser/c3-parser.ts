@@ -20,6 +20,10 @@ import type {
   SourceKind,
 } from '../shared/types.js';
 import { parameterDetailFromLabel } from '../shared/callable.js';
+import {
+  C3_REFLECTION_MEMBER_DESCRIPTOR_TYPE,
+  C3_REFLECTION_TYPE_PARAMETER_TYPE,
+} from '../shared/builtin-types.js';
 
 const parser = new Parser();
 parser.setLanguage(C3 as Parser.Language);
@@ -68,7 +72,13 @@ export function parseSource(
         ),
       ])
     : parsedSymbols;
-  const scopedSymbols = extractScopedSymbols(doc, tree.rootNode, moduleName);
+  const parsedScopedSymbols = extractScopedSymbols(doc, tree.rootNode, moduleName);
+  const scopedSymbols = tree.rootNode.hasError
+    ? mergeRecoveredScopedSymbols(
+        parsedScopedSymbols,
+        recoverTopLevelCallableScopedSymbols(doc, source, moduleName),
+      )
+    : parsedScopedSymbols;
   const diagnostics = collectSyntaxDiagnostics(doc, tree.rootNode);
 
   return {
@@ -755,12 +765,23 @@ function parameterSymbols(
       receiverParamAssigned = true;
     }
 
+    const compileTimeTypeParameter =
+      node.type === 'macro_declaration' &&
+      typeNodeIsName &&
+      (nameNode.type === 'ct_type_ident' ||
+        descendantsOfType(nameNode, 'ct_type_ident').length > 0);
+
     symbols.push(
       createSymbol(doc, param, nameNode, moduleName, SymbolKind.Variable, {
         signature: declarationSignature(param),
-        returnType: typeNodeIsName
-          ? inferredReceiverType
-          : (explicitType ?? inferredReceiverType),
+        kind: compileTimeTypeParameter
+          ? SymbolKind.TypeParameter
+          : SymbolKind.Variable,
+        returnType: compileTimeTypeParameter
+          ? C3_REFLECTION_TYPE_PARAMETER_TYPE
+          : typeNodeIsName
+            ? inferredReceiverType
+            : (explicitType ?? inferredReceiverType),
         scopeRange,
       }),
     );
@@ -890,6 +911,7 @@ function localDeclarationSymbols(
   }
 
   symbols.push(...foreachVariableSymbols(doc, scopeRoot, moduleName));
+  symbols.push(...compileTimeForeachVariableSymbols(doc, scopeRoot, moduleName));
   symbols.push(...forInitializerSymbols(doc, scopeRoot, moduleName, options));
   symbols.push(...conditionalUnwrapVariableSymbols(doc, scopeRoot, moduleName));
   symbols.push(...callBodyParameterSymbols(doc, scopeRoot, moduleName));
@@ -1054,6 +1076,48 @@ function foreachVariableSymbols(
   }
 
   return symbols;
+}
+
+function compileTimeForeachVariableSymbols(
+  doc: TextDocument,
+  scopeRoot: SyntaxNode,
+  moduleName: string,
+): C3Symbol[] {
+  const symbols: C3Symbol[] = [];
+
+  for (const foreachCond of descendantsOfType(scopeRoot, 'ct_foreach_cond')) {
+    const foreachStmt = foreachCond.parent;
+    const body = foreachStmt?.childForFieldName('body');
+    const scopeRange = rangeFromNode(body ?? foreachStmt ?? foreachCond);
+    const collection = foreachCond.childForFieldName('collection');
+
+    for (const fieldName of ['index', 'value'] as const) {
+      const nameNode = foreachCond.childForFieldName(fieldName);
+      if (!nameNode) continue;
+
+      symbols.push(
+        createSymbol(doc, nameNode, nameNode, moduleName, SymbolKind.Variable, {
+          signature: nameNode.text,
+          returnType:
+            fieldName === 'index'
+              ? 'usz'
+              : reflectionMembersCollection(collection)
+                ? C3_REFLECTION_MEMBER_DESCRIPTOR_TYPE
+                : undefined,
+          scopeRange,
+        }),
+      );
+    }
+  }
+
+  return symbols;
+}
+
+function reflectionMembersCollection(collection: SyntaxNode | null): boolean {
+  if (!collection || collection.type !== 'type_access_expr') return false;
+
+  const field = collection.childForFieldName('field');
+  return field?.text === 'members';
 }
 
 function conditionalUnwrapVariableSymbols(
@@ -1389,6 +1453,150 @@ function recoverTopLevelCallableSymbols(
   return symbols;
 }
 
+function recoverTopLevelCallableScopedSymbols(
+  doc: TextDocument,
+  source: string,
+  moduleName: string,
+): C3Symbol[] {
+  const symbols: C3Symbol[] = [];
+  const callableStart = /(^|\n)(?:extern\s+)?(?:fn|macro)\s+/g;
+
+  let match: RegExpExecArray | null;
+  while ((match = callableStart.exec(source))) {
+    const startIndex = match.index + match[1].length;
+    if (braceDepthBefore(source, startIndex) !== 0) continue;
+
+    const headerEnd = callableHeaderEndIndex(source, startIndex);
+    const header = source.slice(startIndex, headerEnd).trim();
+    const prefix = header.match(/^(?:extern\s+)?(?:fn|macro)\s+/)?.[0];
+    const paramsStart = header.indexOf('(');
+    if (!prefix || paramsStart < 0) continue;
+
+    const params = parameterListText(header, paramsStart);
+    const parameterTexts = params ? splitTopLevelParameters(params) : [];
+    const paramsStartOffset =
+      startIndex + source.slice(startIndex, headerEnd).indexOf('(') + 1;
+    const bodyRange = bracedBodyRange(source, headerEnd);
+    const scopeRange = bodyRange
+      ? rangeFromOffsets(doc, bodyRange.start, bodyRange.end)
+      : rangeFromOffsets(doc, startIndex, headerEnd);
+    const isMacro = /(?:^|\s)macro\s+$/.test(prefix);
+
+    symbols.push(
+      ...recoveredParameterSymbols(
+        doc,
+        source,
+        moduleName,
+        parameterTexts,
+        paramsStartOffset,
+        undefined,
+        { isMacro, scopeRange },
+      ),
+    );
+
+    if (isMacro && bodyRange) {
+      symbols.push(
+        ...recoverCompileTimeForeachScopedSymbols(
+          doc,
+          source,
+          moduleName,
+          bodyRange.start + 1,
+          bodyRange.end - 1,
+        ),
+      );
+    }
+  }
+
+  return symbols;
+}
+
+function recoverCompileTimeForeachScopedSymbols(
+  doc: TextDocument,
+  source: string,
+  moduleName: string,
+  bodyStart: number,
+  bodyEnd: number,
+): C3Symbol[] {
+  const symbols: C3Symbol[] = [];
+  const body = source.slice(bodyStart, bodyEnd);
+  let lineStart = bodyStart;
+
+  for (const line of body.split('\n')) {
+    const foreachIndex = line.indexOf('$foreach');
+    if (foreachIndex >= 0) {
+      const match = line.slice(foreachIndex).match(
+        /^\$foreach\s+(?:(?<index>\$[A-Za-z_][A-Za-z0-9_$@]*)\s*,\s*)?(?<value>\$[A-Za-z_][A-Za-z0-9_$@]*)\s*:\s*(?<collection>.*)$/,
+      );
+
+      if (match?.groups) {
+        const scopeStart = lineStart + line.length + 1;
+        const endMarker = source.indexOf('$endforeach', scopeStart);
+        const scopeEnd =
+          endMarker >= 0 && endMarker <= bodyEnd ? endMarker : bodyEnd;
+        const scopeRange = rangeFromOffsets(doc, scopeStart, scopeEnd);
+        const collection = normalizedRecoveredForeachCollection(
+          match.groups.collection,
+        );
+
+        for (const role of ['index', 'value'] as const) {
+          const name = match.groups[role];
+          if (!name) continue;
+
+          const localOffset = line.indexOf(name, foreachIndex);
+          const nameStart = lineStart + localOffset;
+          symbols.push({
+            name,
+            moduleName,
+            kind: SymbolKind.Variable,
+            symbolType: 'variable',
+            uri: doc.uri,
+            range: rangeFromOffsets(doc, nameStart, nameStart + name.length),
+            selectionRange: rangeFromOffsets(
+              doc,
+              nameStart,
+              nameStart + name.length,
+            ),
+            signature: name,
+            documentation: undefined,
+            attributes: [],
+            returnType:
+              role === 'index'
+                ? 'usz'
+                : recoveredReflectionMembersCollection(collection)
+                  ? C3_REFLECTION_MEMBER_DESCRIPTOR_TYPE
+                  : undefined,
+            valueType:
+              role === 'index'
+                ? 'usz'
+                : recoveredReflectionMembersCollection(collection)
+                  ? C3_REFLECTION_MEMBER_DESCRIPTOR_TYPE
+                  : undefined,
+            implementedInterfaces: [],
+            parameters: [],
+            children: [],
+            scopeRange,
+          });
+        }
+      }
+    }
+
+    lineStart += line.length + 1;
+  }
+
+  return symbols;
+}
+
+function normalizedRecoveredForeachCollection(text: string): string {
+  const trimmed = text.trim();
+  return trimmed.endsWith(':') && !trimmed.endsWith('::')
+    ? trimmed.slice(0, -1).trim()
+    : trimmed;
+}
+
+function recoveredReflectionMembersCollection(collection: string): boolean {
+  return /::(?:members)?$/.test(collection.trim());
+}
+
 function recoverCallableSymbol(
   doc: TextDocument,
   source: string,
@@ -1426,7 +1634,13 @@ function recoverCallableSymbol(
   const parameterTexts = params ? splitTopLevelParameters(params) : [];
   const paramsStartOffset =
     startIndex + source.slice(startIndex, endIndex).indexOf('(') + 1;
-  const declaredGenericParams = genericParameterNamesFromText(header);
+  const isMacro = /(?:^|\s)macro\s+$/.test(prefix);
+  const declaredGenericParams = [
+    ...new Set([
+      ...genericParameterNamesFromText(genericListTextFromHeader(header)),
+      ...(isMacro ? recoveredCompileTimeTypeParameterNames(parameterTexts) : []),
+    ]),
+  ];
   const effectiveGenericParams = effectiveGenericParamsFor(
     moduleGenericParams,
     declaredGenericParams,
@@ -1469,6 +1683,7 @@ function recoverCallableSymbol(
       parameterTexts,
       paramsStartOffset,
       receiverType,
+      { isMacro },
     ),
   };
 }
@@ -1484,13 +1699,19 @@ function recoveredParameterSymbols(
   parameters: string[],
   paramsStartOffset: number,
   receiverType: string | undefined,
+  options: { isMacro?: boolean; scopeRange?: Range } = {},
 ): C3Symbol[] {
   const symbols: C3Symbol[] = [];
   let searchOffset = paramsStartOffset;
 
   for (let index = 0; index < parameters.length; index++) {
     const parameter = parameters[index];
-    const info = recoveredParameterInfo(parameter, index, receiverType);
+    const info = recoveredParameterInfo(
+      parameter,
+      index,
+      receiverType,
+      options.isMacro,
+    );
     if (!info) continue;
 
     const parameterOffset = source.indexOf(parameter, searchOffset);
@@ -1504,8 +1725,8 @@ function recoveredParameterSymbols(
     symbols.push({
       name: info.name,
       moduleName,
-      kind: SymbolKind.Variable,
-      symbolType: 'variable',
+      kind: info.kind ?? SymbolKind.Variable,
+      symbolType: info.kind === SymbolKind.TypeParameter ? 'type' : 'variable',
       uri: doc.uri,
       range: rangeFromOffsets(doc, rangeStart, rangeStart + parameter.length),
       selectionRange: rangeFromOffsets(
@@ -1521,6 +1742,7 @@ function recoveredParameterSymbols(
       implementedInterfaces: [],
       parameters: [],
       children: [],
+      scopeRange: options.scopeRange,
     });
 
     if (parameterOffset >= 0) {
@@ -1535,10 +1757,19 @@ function recoveredParameterInfo(
   parameter: string,
   index: number,
   receiverType: string | undefined,
-): { name: string; type?: string } | undefined {
+  isMacro = false,
+): { name: string; type?: string; kind?: SymbolKind } | undefined {
   if (parameter === '...' || parameter.length === 0) return undefined;
 
   const withoutDefault = parameter.split('=')[0]?.trim() ?? parameter;
+  if (isMacro && recoveredCompileTimeTypeParameterName(withoutDefault)) {
+    return {
+      name: withoutDefault,
+      type: C3_REFLECTION_TYPE_PARAMETER_TYPE,
+      kind: SymbolKind.TypeParameter,
+    };
+  }
+
   const receiver = withoutDefault.match(/^&?([A-Za-z_$@][A-Za-z0-9_$@]*)$/);
 
   if (receiver) {
@@ -1576,6 +1807,49 @@ function mergeRecoveredSymbols(
       return true;
     }),
   ];
+}
+
+function mergeRecoveredScopedSymbols(
+  parsedSymbols: C3Symbol[],
+  recoveredSymbols: C3Symbol[],
+): C3Symbol[] {
+  const merged = [...parsedSymbols];
+  const indices = new Map(
+    parsedSymbols.map((symbol, index) => [symbolIdentity(symbol), index]),
+  );
+
+  for (const recovered of recoveredSymbols) {
+    const identity = symbolIdentity(recovered);
+    const existingIndex = indices.get(identity);
+
+    if (existingIndex === undefined) {
+      indices.set(identity, merged.length);
+      merged.push(recovered);
+      continue;
+    }
+
+    const existing = merged[existingIndex];
+    if (existing && shouldPreferRecoveredScopedSymbol(existing, recovered)) {
+      merged[existingIndex] = recovered;
+    }
+  }
+
+  return merged;
+}
+
+function shouldPreferRecoveredScopedSymbol(
+  existing: C3Symbol,
+  recovered: C3Symbol,
+): boolean {
+  if (!existing.returnType && recovered.returnType) return true;
+  if (
+    existing.kind !== SymbolKind.TypeParameter &&
+    recovered.kind === SymbolKind.TypeParameter
+  ) {
+    return true;
+  }
+
+  return false;
 }
 
 function symbolIdentity(symbol: C3Symbol): string {
@@ -2180,6 +2454,23 @@ function genericParameterNamesFromText(text: string | undefined): string[] {
       (parameter) => parameter.trim().match(/[A-Za-z_$@][A-Za-z0-9_$@]*$/)?.[0],
     )
     .filter((parameter): parameter is string => !!parameter);
+}
+
+function genericListTextFromHeader(header: string): string | undefined {
+  return header.match(/<[^>]*>/)?.[0];
+}
+
+function recoveredCompileTimeTypeParameterNames(parameters: string[]): string[] {
+  return parameters.flatMap((parameter) => {
+    const name = recoveredCompileTimeTypeParameterName(
+      parameter.split('=')[0]?.trim() ?? parameter,
+    );
+    return name ? [name.replace(/^\$/, '')] : [];
+  });
+}
+
+function recoveredCompileTimeTypeParameterName(text: string): string | undefined {
+  return /^\$[A-Z_][A-Za-z0-9_]*$/.test(text) ? text : undefined;
 }
 
 function collectSyntaxDiagnostics(

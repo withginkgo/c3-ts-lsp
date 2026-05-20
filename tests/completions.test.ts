@@ -462,6 +462,112 @@ test('completionItems replaces the $ trigger for compile-time completions', () =
   });
 });
 
+test('completionItems suggests reflected member descriptor members', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/reflection.c3';
+  const { doc, parsed, position } = completionFixture(uri, [
+    'macro print_json_fields($Type){',
+    '    $foreach $field : $Type::members:',
+    '        $field.|',
+    '    $endforeach',
+    '}',
+    '',
+  ]);
+
+  index.upsert(parsed);
+
+  const labels = completionItems(index, doc, parsed, position).map(
+    (item) => item.label,
+  );
+
+  for (const label of [
+    'name',
+    'type',
+    'offset',
+    'alignment',
+    'has_tag',
+    'get_tag',
+  ]) {
+    assert.equal(labels.includes(label), true, `${label} should be suggested`);
+  }
+});
+
+test('completionItems suggests reflected members in serialization macro', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/encode.c3';
+  const { doc, parsed, position } = completionFixture(uri, [
+    'macro void @encode_json($Type, $Type* obj)',
+    '{',
+    '    $foreach $member : $Type::members:',
+    '        $member.|',
+    '    $endforeach',
+    '}',
+    '',
+  ]);
+
+  index.upsert(parsed);
+
+  const labels = completionItems(index, doc, parsed, position).map(
+    (item) => item.label,
+  );
+
+  for (const label of [
+    'name',
+    'type',
+    'offset',
+    'alignment',
+    'has_tag',
+    'get_tag',
+  ]) {
+    assert.equal(labels.includes(label), true, `${label} should be suggested`);
+  }
+});
+
+test('completionItems suggests partial reflected member descriptor methods', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/reflection.c3';
+  const { doc, parsed, position } = completionFixture(uri, [
+    'macro print_json_fields($Type){',
+    '    $foreach $field : $Type::members:',
+    '        $field.has_|',
+    '    $endforeach',
+    '}',
+    '',
+  ]);
+
+  index.upsert(parsed);
+
+  const labels = completionItems(index, doc, parsed, position).map(
+    (item) => item.label,
+  );
+
+  assert.equal(labels.includes('has_tag'), true);
+});
+
+test('completionItems suggests reflected type access members', () => {
+  for (const lines of [
+    ['macro print_json_fields($Type){', '    $Type::|', '}', ''],
+    [
+      'macro print_json_fields($Type){',
+      '    $foreach $field : $Type::|',
+      '}',
+      '',
+    ],
+  ]) {
+    const index = new ProjectIndex();
+    const uri = 'file:///workspace/reflection.c3';
+    const { doc, parsed, position } = completionFixture(uri, lines);
+
+    index.upsert(parsed);
+
+    const labels = completionItems(index, doc, parsed, position).map(
+      (item) => item.label,
+    );
+
+    assert.equal(labels.includes('members'), true);
+  }
+});
+
 test('completionItems suggests implemented interface methods in type method declarations', () => {
   const index = new ProjectIndex();
   const uri = 'file:///workspace/app.c3';

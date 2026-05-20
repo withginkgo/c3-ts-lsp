@@ -50,6 +50,14 @@ export function isSliceTypeName(typeName: string | undefined): boolean {
   return shape?.postfixes[0] === '[]';
 }
 
+export function sliceTypeName(typeName: string | undefined): string | undefined {
+  const shape = typeShape(typeName);
+  if (!shape?.postfixes[0]?.startsWith('[')) return undefined;
+
+  const slicePostfixes = ['[]', ...shape.postfixes.slice(1)];
+  return typeNameFromShape(shape.base, slicePostfixes);
+}
+
 export function arrayLikeElementTypeName(
   typeName: string | undefined,
 ): string | undefined {
@@ -86,7 +94,7 @@ export function isOptionalTypeName(typeName: string | undefined): boolean {
 }
 
 export function nonOptionalTypeName(typeName: string): string {
-  return normalizeTypeName(removeOuterOptionalMarker(typeName));
+  return removeOuterOptionalMarker(typeName);
 }
 
 export function optionalTypeName(typeName: string): string {
@@ -169,6 +177,13 @@ export function canImplicitlyConvertType(
   if (typeNamesCompatible(actual, expected)) return true;
 
   if (isArrayLikeTypeName(actual)) {
+    if (isSliceTypeName(expected)) {
+      const slicified = sliceTypeName(actual);
+      if (slicified && typeNamesCompatible(slicified, expected)) {
+        return true;
+      }
+    }
+
     const elementType = arrayLikeElementTypeName(actual);
     if (elementType && canImplicitlyConvertType(`${elementType}*`, expected)) {
       return true;

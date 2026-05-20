@@ -6,6 +6,10 @@ import { pathToFileURL } from 'node:url';
 import { SymbolKind } from 'vscode-languageserver/node.js';
 
 import { parseSource } from '../src/parser/c3-parser.js';
+import {
+  C3_REFLECTION_MEMBER_DESCRIPTOR_TYPE,
+  C3_REFLECTION_TYPE_PARAMETER_TYPE,
+} from '../src/shared/builtin-types.js';
 import type { C3Symbol } from '../src/shared/types.js';
 
 test('parseSource extracts the module name and top-level function symbols', () => {
@@ -257,6 +261,227 @@ test('parseSource records compile-time type parameters on macros', () => {
   assert.equal(symbol?.genericParameterCount, 1);
   assert.equal(symbol?.returnType, 'Type[]');
   assert.equal(symbol?.parameterDetails?.[0]?.type, '$Type');
+});
+
+test('parseSource accepts compile-time reflection macro control flow', () => {
+  const snippets = [
+    [
+      'macro print_json_fields($Type){',
+      '    $foreach $field : $Type::members:',
+      '        $echo $field.name;',
+      '    $endforeach',
+      '}',
+      '',
+    ],
+    [
+      'macro print_json_fields($Type){',
+      '    $foreach $field : $Type::members:',
+      '        $if $field.has_tag("json_skip"):',
+      '        $else',
+      '            $echo $field.name;',
+      '        $endif',
+      '    $endforeach',
+      '}',
+      '',
+    ],
+    [
+      'macro print_json_fields($Type){',
+      '    $foreach $field : $Type::members:',
+      '        $if $field.has_tag("json_name"):',
+      '            $echo $field.get_tag("json_name");',
+      '        $else',
+      '            $echo $field.name;',
+      '        $endif',
+      '    $endforeach',
+      '}',
+      '',
+    ],
+  ];
+
+  for (const [index, lines] of snippets.entries()) {
+    const parsed = parseSource(
+      `file:///workspace/reflection-${index}.c3`,
+      lines.join('\n'),
+    );
+    const macro = parsed.symbols.find(
+      (candidate) => candidate.name === 'print_json_fields',
+    );
+    const typeParam = parsed.scopedSymbols.find(
+      (candidate) => candidate.name === '$Type',
+    );
+    const field = parsed.scopedSymbols.find(
+      (candidate) => candidate.name === '$field',
+    );
+
+    assert.deepEqual(parsed.diagnostics, []);
+    assert.equal(macro?.kind, SymbolKind.Function);
+    assert.deepEqual(macro?.declaredGenericParams, ['Type']);
+    assert.equal(typeParam?.kind, SymbolKind.TypeParameter);
+    assert.equal(typeParam?.returnType, C3_REFLECTION_TYPE_PARAMETER_TYPE);
+    assert.equal(field?.returnType, C3_REFLECTION_MEMBER_DESCRIPTOR_TYPE);
+  }
+});
+
+test('parseSource accepts reflection serialization macro forms', () => {
+  const snippets = [
+    [
+      'macro void @encode_json($Type, $Type* obj)',
+      '{',
+      '}',
+      '',
+    ],
+    [
+      'macro void @encode_json($Type, $Type* obj)',
+      '{',
+      '    $foreach $member : $Type::members:',
+      '        String name = $member.name;',
+      '    $endforeach',
+      '}',
+      '',
+    ],
+    [
+      'macro void @encode_json($Type, $Type* obj)',
+      '{',
+      '    $foreach $member : $Type::members:',
+      '        $if $member.has_tag("skip"):',
+      '            $continue;',
+      '        $endif',
+      '    $endforeach',
+      '}',
+      '',
+    ],
+    [
+      'macro void @encode_json($Type, $Type* obj)',
+      '{',
+      '    $foreach $member : $Type::members:',
+      '        String json_name = $member.name;',
+      '        $if $member.has_tag("json_name"):',
+      '            json_name = $member.get_tag("json_name");',
+      '        $endif',
+      '    $endforeach',
+      '}',
+      '',
+    ],
+    [
+      'macro void @encode_json($Type, $Type* obj)',
+      '{',
+      '    $foreach $member : $Type::members:',
+      '        write_field($member.name, obj.$eval($member.name));',
+      '    $endforeach',
+      '}',
+      '',
+    ],
+  ];
+
+  for (const [index, lines] of snippets.entries()) {
+    const parsed = parseSource(
+      `file:///workspace/encode-${index}.c3`,
+      lines.join('\n'),
+    );
+    const tree = parsed.tree.rootNode.toString();
+    const macro = parsed.symbols.find(
+      (candidate) => candidate.name === '@encode_json',
+    );
+    const typeParam = parsed.scopedSymbols.find(
+      (candidate) => candidate.name === '$Type',
+    );
+    const obj = parsed.scopedSymbols.find((candidate) => candidate.name === 'obj');
+    const member = parsed.scopedSymbols.find(
+      (candidate) => candidate.name === '$member',
+    );
+
+    assert.deepEqual(parsed.diagnostics, []);
+    assert.equal(macro?.kind, SymbolKind.Function);
+    assert.equal(macro?.returnType, 'void');
+    assert.deepEqual(macro?.declaredGenericParams, ['Type']);
+    assert.equal(typeParam?.kind, SymbolKind.TypeParameter);
+    assert.equal(typeParam?.returnType, C3_REFLECTION_TYPE_PARAMETER_TYPE);
+    assert.equal(obj?.returnType, '$Type*');
+    assert.match(tree, /macro_declaration/);
+
+    if (lines.some((line) => line.includes('$foreach'))) {
+      assert.equal(member?.returnType, C3_REFLECTION_MEMBER_DESCRIPTOR_TYPE);
+      assert.match(tree, /ct_foreach_stmt/);
+      assert.match(tree, /type_access_expr/);
+    }
+
+    if (lines.some((line) => line.includes('$eval'))) {
+      assert.match(tree, /access_eval/);
+    }
+  }
+});
+
+test('parseSource recovers scoped reflection symbols in incomplete serialization macros', () => {
+  const snippets = [
+    [
+      'macro void @encode_json($Type, $Type* obj)',
+      '{',
+      '    $foreach $member : $Type::members:',
+      '        obj.',
+      '    $endforeach',
+      '}',
+      '',
+    ],
+    [
+      'macro void @encode_json($Type, $Type* obj)',
+      '{',
+      '    $foreach $member : $Type::members:',
+      '        obj.$',
+      '    $endforeach',
+      '}',
+      '',
+    ],
+    [
+      'macro void @encode_json($Type, $Type* obj)',
+      '{',
+      '    $foreach $member : $Type::members:',
+      '        obj.$eval(',
+      '    $endforeach',
+      '}',
+      '',
+    ],
+    [
+      'macro void @encode_json($Type, $Type* obj)',
+      '{',
+      '    $foreach $member : $Type::members:',
+      '        obj.$eval($member.',
+      '    $endforeach',
+      '}',
+      '',
+    ],
+    [
+      'macro void @encode_json($Type, $Type* obj)',
+      '{',
+      '    $foreach $member : $Type::',
+      '    $endforeach',
+      '}',
+      '',
+    ],
+  ];
+
+  for (const [index, lines] of snippets.entries()) {
+    const parsed = parseSource(
+      `file:///workspace/encode-incomplete-${index}.c3`,
+      lines.join('\n'),
+    );
+    const macro = parsed.symbols.find(
+      (candidate) => candidate.name === '@encode_json',
+    );
+    const typeParam = parsed.scopedSymbols.find(
+      (candidate) => candidate.name === '$Type',
+    );
+    const obj = parsed.scopedSymbols.find((candidate) => candidate.name === 'obj');
+    const member = parsed.scopedSymbols.find(
+      (candidate) => candidate.name === '$member',
+    );
+
+    assert.equal(macro?.kind, SymbolKind.Function);
+    assert.deepEqual(macro?.declaredGenericParams, ['Type']);
+    assert.equal(typeParam?.kind, SymbolKind.TypeParameter);
+    assert.equal(typeParam?.returnType, C3_REFLECTION_TYPE_PARAMETER_TYPE);
+    assert.equal(obj?.returnType, '$Type*');
+    assert.equal(member?.returnType, C3_REFLECTION_MEMBER_DESCRIPTOR_TYPE);
+  }
 });
 
 test('parseSource extracts Phase 1 top-level declaration coverage', () => {

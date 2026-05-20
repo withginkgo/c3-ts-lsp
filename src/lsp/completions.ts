@@ -576,6 +576,26 @@ function moduleMemberCompletions(
   current: ParsedDocument,
   context: ModuleNamespaceCompletionContext,
 ): CompletionItem[] {
+  const typeAccessItems = index
+    .typeAccessMemberSymbols(current, context.prefix, context.replaceRange.start)
+    .filter((symbol) =>
+      completionLabelMatchesPrefix(symbol.name, context.memberPrefix),
+    )
+    .map((symbol) =>
+      moduleNamespaceCompletionItem(
+        {
+          label: symbol.name,
+          kind: toCompletionKind(symbol.kind),
+          detail: symbol.signature,
+        },
+        context,
+      ),
+    );
+
+  if (typeAccessItems.length > 0) {
+    return uniqueCompletionItems(typeAccessItems);
+  }
+
   const moduleItems = index
     .moduleChildNamesForPrefix(current, context.prefix)
     .filter((name) => completionLabelMatchesPrefix(name, context.memberPrefix))

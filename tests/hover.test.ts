@@ -72,6 +72,86 @@ test('hover shows owning struct for member symbols', () => {
   assert.match(value, /struct HttpResponse \{\n    String body;\n\}/);
 });
 
+test('hover explains reflected member descriptor fields and tag helpers', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/reflection.c3';
+  const source = [
+    'macro print_json_fields($Type){',
+    '    $foreach $field : $Type::members:',
+    '        $if $field.has_tag("json_skip"):',
+    '        $else',
+    '            $if $field.has_tag("json_name"):',
+    '                $echo $field.get_tag("json_name");',
+    '            $else',
+    '                $echo $field.name;',
+    '            $endif',
+    '        $endif',
+    '    $endforeach',
+    '}',
+    '',
+  ].join('\n');
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+  const parsed = parseSource(uri, source);
+
+  index.upsert(parsed);
+
+  const namePosition = doc.positionAt(source.indexOf('name;'));
+  const hasTagPosition = doc.positionAt(source.indexOf('has_tag("json_skip")'));
+  const getTagPosition = doc.positionAt(source.indexOf('get_tag("json_name")'));
+
+  const nameHover = hoverFromResolveResult(
+    index,
+    index.resolveSymbol(uri, 'name', namePosition),
+    { currentUri: uri, position: namePosition },
+  );
+  const hasTagHover = hoverFromResolveResult(
+    index,
+    index.resolveSymbol(uri, 'has_tag', hasTagPosition),
+    { currentUri: uri, position: hasTagPosition },
+  );
+  const getTagHover = hoverFromResolveResult(
+    index,
+    index.resolveSymbol(uri, 'get_tag', getTagPosition),
+    { currentUri: uri, position: getTagPosition },
+  );
+
+  assert.match(hoverValue(nameHover), /compile-time name/);
+  assert.match(hoverValue(hasTagHover), /tag named `json_skip`/);
+  assert.match(hoverValue(getTagHover), /tag value associated with `json_name`/);
+});
+
+test('hover explains compile-time eval field selectors', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/encode.c3';
+  const source = [
+    'fn void write_field(String name, any value) {}',
+    'macro void @encode_json($Type, $Type* obj)',
+    '{',
+    '    $foreach $member : $Type::members:',
+    '        write_field($member.name, obj.$eval($member.name));',
+    '    $endforeach',
+    '}',
+    '',
+  ].join('\n');
+  const doc = TextDocument.create(uri, 'c3', 1, source);
+  const parsed = parseSource(uri, source);
+  const position = doc.positionAt(source.indexOf('$eval') + '$'.length);
+  const ref = referenceAtPosition(doc, position);
+
+  index.upsert(parsed);
+
+  assert.ok(ref);
+  const hover = hoverFromResolveResult(
+    index,
+    index.resolveSymbol(uri, ref.text, position),
+    { currentUri: uri, position },
+  );
+  const value = hoverValue(hover);
+
+  assert.match(value, /\$eval/);
+  assert.match(value, /dynamic field\/member selector/);
+});
+
 test('hover shows substituted types for promoted anonymous union fields', () => {
   const index = new ProjectIndex();
   const uri = 'file:///workspace/app.c3';

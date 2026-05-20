@@ -21,6 +21,7 @@ export const semanticTokenLegend: SemanticTokensLegend = {
     'type',
     'enum',
     'interface',
+    'fault',
     'property',
     'variable',
     'enumMember',
@@ -117,6 +118,7 @@ function tokenTypeForName(name: string): number | undefined {
 
 function tokenTypeNameForSymbol(symbol: C3Symbol): string {
   if (symbol.signature.startsWith('macro ')) return 'macro';
+  if (symbol.typeInfo?.kind === 'fault-value') return 'fault';
 
   switch (symbol.kind) {
     case SymbolKind.Function:
@@ -146,7 +148,10 @@ function tokenModifiersForSymbol(symbol: C3Symbol): number {
   let modifiers =
     1 << semanticTokenLegend.tokenModifiers.indexOf('declaration');
 
-  if (symbol.kind === SymbolKind.Constant) {
+  if (
+    symbol.kind === SymbolKind.Constant ||
+    symbol.typeInfo?.kind === 'fault-value'
+  ) {
     modifiers |= 1 << semanticTokenLegend.tokenModifiers.indexOf('readonly');
   }
 

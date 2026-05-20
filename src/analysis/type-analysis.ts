@@ -15,6 +15,7 @@ import {
   terminalTypeName,
   typeNamesCompatible,
 } from '../shared/type-ref.js';
+import { builtinTypeNames } from '../shared/builtin-types.js';
 import type { C3Symbol, ParsedDocument } from '../shared/types.js';
 
 export function expressionTypeName(
@@ -212,6 +213,10 @@ export function shouldReportTypeMismatch(
     return true;
   }
 
+  if (isBareFaultForOptionalType(actualType, expectedType)) {
+    return true;
+  }
+
   if (
     !isOptionalTypeName(actualType) &&
     isOptionalTypeName(expectedType) &&
@@ -234,10 +239,27 @@ export function shouldReportTypeMismatch(
   if (canImplicitlyConvertType(actualType, expectedType)) return false;
   if (typeNamesCompatible(actualType, expectedType)) return false;
 
+  if (normalizeTypeName(actualType) === normalizeTypeName(expectedType)) {
+    return true;
+  }
+
   const actual = comparableTypeCategory(actualType, expression);
   const expected = comparableTypeCategory(expectedType);
 
   return !!actual && !!expected && actual !== expected;
+}
+
+export function isBareFaultForOptionalType(
+  actualType: string | undefined,
+  expectedType: string | undefined,
+): boolean {
+  if (!actualType || !expectedType) return false;
+  if (!isOptionalTypeName(expectedType) || isOptionalTypeName(actualType)) {
+    return false;
+  }
+
+  const terminal = terminalTypeName(actualType);
+  return terminal === 'fault' || terminal === 'anyfault';
 }
 
 export function comparableTypeCategory(
@@ -272,11 +294,35 @@ export function comparableTypeCategory(
   return undefined;
 }
 
+const integerConditionTypeNames = new Set([
+  'char',
+  'ichar',
+  'short',
+  'int',
+  'long',
+  'int128',
+  'uint',
+  'ushort',
+  'ulong',
+  'uint128',
+  'usz',
+  'isz',
+  'sz',
+  'iptr',
+  'uptr',
+]);
+
 export function isBoolType(typeName: string | undefined): boolean {
-  return (
-    !isOptionalTypeName(typeName) &&
-    normalizeTypeName(typeName ?? '') === 'bool'
-  );
+  const normal = normalizeTypeName(typeName ?? '');
+  if (!normal) return false;
+
+  if (normal === 'bool') return true;
+
+  if (integerConditionTypeNames.has(normal)) return true;
+
+  if (isPointerTypeName(normal)) return true;
+
+  return !builtinTypeNames.has(normal);
 }
 
 export function canPassArgumentType(
@@ -419,6 +465,5 @@ const realTypeNames = new Set([
   'float',
   'double',
   'float128',
-  'bfloat16',
   'bfloat',
 ]);

@@ -12,6 +12,7 @@ import { callableParameters, isCallableSymbol } from '../shared/callable.js';
 import { callArguments, callTargetFor } from '../shared/calls.js';
 import {
   isOptionalTypeName,
+  nonOptionalTypeName,
   terminalTypeName,
   typeNamesCompatible,
 } from '../shared/type-ref.js';
@@ -447,12 +448,30 @@ function initializerDiagnostics(
     diagnostics.push({
       severity: DiagnosticSeverity.Error,
       range: rangeFromNode(value),
-      message: `Cannot initialize '${name}' of type '${expectedType}' with '${actualType}'`,
+      message: initializerMismatchMessage(name, expectedType, actualType),
       source: diagnosticSource,
     });
   }
 
   return diagnostics;
+}
+
+function initializerMismatchMessage(
+  name: string,
+  expectedType: string,
+  actualType: string,
+): string {
+  const base = `Cannot initialize '${name}' of type '${expectedType}' with '${actualType}'`;
+
+  if (isOptionalTypeName(actualType) && isOptionalTypeName(expectedType)) {
+    const innerActual = nonOptionalTypeName(actualType);
+    const innerExpected = nonOptionalTypeName(expectedType);
+    if (innerActual !== innerExpected) {
+      return `${base}: '${innerActual}' is not assignable to '${innerExpected}'`;
+    }
+  }
+
+  return base;
 }
 
 type VariableInitializerContext = {
@@ -509,12 +528,30 @@ function assignmentDiagnostics(
     diagnostics.push({
       severity: DiagnosticSeverity.Error,
       range: rangeFromNode(right),
-      message: `Cannot assign '${actualType}' to '${left.text}' of type '${expectedType}'`,
+      message: assignmentMismatchMessage(left.text, expectedType, actualType),
       source: diagnosticSource,
     });
   }
 
   return diagnostics;
+}
+
+function assignmentMismatchMessage(
+  target: string,
+  expectedType: string,
+  actualType: string,
+): string {
+  const base = `Cannot assign '${actualType}' to '${target}' of type '${expectedType}'`;
+
+  if (isOptionalTypeName(actualType) && isOptionalTypeName(expectedType)) {
+    const innerActual = nonOptionalTypeName(actualType);
+    const innerExpected = nonOptionalTypeName(expectedType);
+    if (innerActual !== innerExpected) {
+      return `${base}: '${innerActual}' is not assignable to '${innerExpected}'`;
+    }
+  }
+
+  return base;
 }
 
 function conditionDiagnostics(

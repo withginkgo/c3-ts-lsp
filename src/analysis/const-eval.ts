@@ -2,6 +2,7 @@ import type { SyntaxNode } from 'tree-sitter';
 import type { Position } from 'vscode-languageserver/node.js';
 
 import type { ProjectIndex } from '../project/project-index.js';
+import { callTargetFor } from '../shared/calls.js';
 import { isOptionalTypeName, normalizeTypeName } from '../shared/type-ref.js';
 import type { ParsedDocument } from '../shared/types.js';
 import { expressionTypeName, rangeFromNode } from './type-analysis.js';
@@ -70,10 +71,13 @@ export function constantExpression(
     const functionNode = expression.childForFieldName('function');
     if (!functionNode) return unknown();
 
-    const resolved = index.resolveSymbol(
+    const target = callTargetFor(functionNode);
+    if (!target) return unknown();
+
+    const resolved = index.resolveCallableSymbol(
       parsed.uri,
-      functionNode.text,
-      rangeFromNode(functionNode).start,
+      target.ref,
+      target.position,
     ).selected;
 
     return unknown(resolved?.returnType);

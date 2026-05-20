@@ -9,10 +9,11 @@ import type { SyntaxNode } from 'tree-sitter';
 import type { ProjectIndex } from '../project/project-index.js';
 import { isCallableSymbol } from '../shared/callable.js';
 import { nodeAlwaysReturns } from '../shared/control-flow.js';
-import { normalizeTypeName } from '../shared/type-ref.js';
+import { isOptionalTypeName, normalizeTypeName } from '../shared/type-ref.js';
 import type { C3Symbol, ParsedDocument } from '../shared/types.js';
 import {
   expressionTypeName,
+  isBareFaultForOptionalType,
   rangeFromNode,
   shouldReportTypeMismatch,
 } from './type-analysis.js';
@@ -49,6 +50,7 @@ function returnStatementDiagnostics(
   const diagnostics: Diagnostic[] = [];
   const returnType = symbol.returnType ?? 'void';
   const requiresValue = requiresReturnValue(returnType);
+  const validatesExpression = requiresValue || isOptionalTypeName(returnType);
 
   for (const statement of returnStatementsInBody(body)) {
     const expression = returnExpression(statement);
@@ -73,7 +75,7 @@ function returnStatementDiagnostics(
       continue;
     }
 
-    if (!requiresValue || !expression) continue;
+    if (!validatesExpression || !expression) continue;
 
     const actualType = expressionTypeName(index, parsed, expression);
 
@@ -84,13 +86,31 @@ function returnStatementDiagnostics(
       diagnostics.push({
         severity: DiagnosticSeverity.Error,
         range: rangeFromNode(expression),
-        message: `Cannot return '${actualType}' from '${symbol.name}' with return type '${returnType}'`,
+        message: returnTypeMismatchMessage(
+          symbol.name,
+          returnType,
+          actualType,
+          expression,
+        ),
         source: diagnosticSource,
       });
     }
   }
 
   return diagnostics;
+}
+
+function returnTypeMismatchMessage(
+  functionName: string,
+  returnType: string,
+  actualType: string,
+  expression: SyntaxNode,
+): string {
+  if (isBareFaultForOptionalType(actualType, returnType)) {
+    return `Cannot return bare fault '${expression.text}' from '${functionName}' with optional return type '${returnType}'; use 'return ${expression.text}~;'`;
+  }
+
+  return `Cannot return '${actualType}' from '${functionName}' with return type '${returnType}'`;
 }
 
 function missingReturnDiagnostics(

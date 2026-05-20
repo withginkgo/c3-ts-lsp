@@ -217,6 +217,67 @@ test('semanticDiagnostics evaluates simple compile-time assertions', () => {
   );
 });
 
+test('semanticDiagnostics accepts nested compile-time reflection control flow', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/reflection.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'macro print_json_fields($Type){',
+      '    $foreach $field : $Type::members:',
+      '        $if $field.has_tag("json_skip"):',
+      '        $else',
+      '            $if $field.has_tag("json_name"):',
+      '                $echo $field.get_tag("json_name");',
+      '            $else',
+      '                $echo $field.name;',
+      '            $endif',
+      '        $endif',
+      '    $endforeach',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(parsed.diagnostics, []);
+  assert.deepEqual(semanticDiagnostics(index, parsed), []);
+});
+
+test('semanticDiagnostics accepts reflection serialization macro dynamic field access', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/encode.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'fn void write_field(String name, any value) {}',
+      'macro void @encode_json($Type, $Type* obj)',
+      '{',
+      '    $foreach $member : $Type::members:',
+      '        $if $member.has_tag("skip"):',
+      '            $continue;',
+      '        $endif',
+      '',
+      '        String json_name = $member.name;',
+      '',
+      '        $if $member.has_tag("json_name"):',
+      '            json_name = $member.get_tag("json_name");',
+      '        $endif',
+      '',
+      '        write_field(json_name, obj.$eval($member.name));',
+      '    $endforeach',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(parsed.diagnostics, []);
+  assert.deepEqual(semanticDiagnostics(index, parsed), []);
+});
+
 test('semanticDiagnostics handles contracts without treating them as ordinary references', () => {
   const index = new ProjectIndex();
   const uri = 'file:///workspace/app.c3';
@@ -1133,6 +1194,7 @@ test('semanticDiagnostics accepts complete return paths and void-like returns', 
       '        return 2;',
       '    }',
       '}',
+      'fn int test_lambda() => 1;',
       'fn void visit() {',
       '    return;',
       '}',
@@ -1191,6 +1253,47 @@ test('semanticDiagnostics still reports loops that can break and fall through', 
   assert.deepEqual(
     semanticDiagnostics(index, parsed).map((diagnostic) => diagnostic.message),
     ["Function 'run' must return a value of type 'int' on all paths"],
+  );
+});
+
+test('semanticDiagnostics reports bare faults returned from optional functions', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'faultdef EXCEPT_CONN;',
+      'fn void? bad_void() {',
+      '    return EXCEPT_CONN;',
+      '}',
+      'fn int? bad_int() {',
+      '    return EXCEPT_CONN;',
+      '}',
+      'fn void? ok_fault() {',
+      '    return EXCEPT_CONN~;',
+      '}',
+      'fn int? ok_empty() {',
+      '    return {};',
+      '}',
+      'fn int? ok_value(int value) {',
+      '    return value;',
+      '}',
+      'fn int? ok_optional(int? value) {',
+      '    return value;',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(
+    semanticDiagnostics(index, parsed).map((diagnostic) => diagnostic.message),
+    [
+      "Cannot return bare fault 'EXCEPT_CONN' from 'bad_void' with optional return type 'void?'; use 'return EXCEPT_CONN~;'",
+      "Cannot return bare fault 'EXCEPT_CONN' from 'bad_int' with optional return type 'int?'; use 'return EXCEPT_CONN~;'",
+    ],
   );
 });
 
@@ -2268,7 +2371,6 @@ test('semanticDiagnostics validates call arguments, initializers, assignments, a
       "Cannot pass 'String' to parameter 'port' of 'connect' with type 'int'",
       "Cannot initialize 'name' of type 'String' with 'int'",
       "Cannot initialize 'number' of type 'int' with 'String'",
-      "Condition expression should be 'bool', got 'int'",
       "Cannot assign 'int' to 'name' of type 'String'",
       "Cannot assign 'String' to 'count' of type 'int'",
     ],
@@ -2714,5 +2816,230 @@ test('semanticDiagnostics reports duplicate callable names as ambiguous', () => 
       "Ambiguous function call 'add' (2 candidates)",
       "Ambiguous function call 'add' (2 candidates)",
     ],
+  );
+});
+
+test('semanticDiagnostics accepts integer types as conditions', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'fn void use(int count, uint mask, char ch) {',
+      '    if (count) {}',
+      '    while (mask) {}',
+      '    if (ch) {}',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(semanticDiagnostics(index, parsed), []);
+});
+
+test('semanticDiagnostics accepts enum and bitwise-AND expressions as conditions', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'enum PollEvent : ushort {',
+      '    READ = 1,',
+      '    WRITE = 2,',
+      '}',
+      'fn void use(PollEvent ev) {',
+      '    if (ev & PollEvent.READ) {}',
+      '    while (ev & PollEvent.WRITE) {}',
+      '    if (ev) {}',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(semanticDiagnostics(index, parsed), []);
+});
+
+test('semanticDiagnostics accepts slice operations and passes them to array parameters', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'fn void read(char[] bytes, usz len) {}',
+      'struct Reader { char[256] bytes; usz count; }',
+      'fn void use(char[256] polls, usz poll_count) {',
+      '    read(polls[:poll_count], poll_count);',
+      '    read(polls[0:poll_count], poll_count);',
+      '    read(polls[0..poll_count - 1], poll_count);',
+      '}',
+      'fn void use_reader(Reader* self) {',
+      '    read(self.bytes[0..self.count - 1], self.count);',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(semanticDiagnostics(index, parsed), []);
+});
+
+test('semanticDiagnostics accepts pointer types as conditions', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'struct Foo {}',
+      'fn void use(Foo* ptr) {',
+      '    if (ptr) {}',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(semanticDiagnostics(index, parsed), []);
+});
+
+test('semanticDiagnostics detects optional inner type mismatches in variable declarations', () => {
+  const index = new ProjectIndex();
+  const app = parseSource(
+    'file:///workspace/app.c3',
+    [
+      'module app;',
+      'import std::net;',
+      'import std::net::tcp;',
+      'struct Foo {}',
+      'fn Foo? make_foo();',
+      'fn int? maybe_int();',
+      'fn void? run() {',
+      '    TcpServerSocket? ok_server = tcp::listen("127.0.0.1", 9000, 128, net::SocketOption.REUSEADDR);',
+      '    TcpServerSocket*? bad_server = tcp::listen("127.0.0.1", 9000, 128, net::SocketOption.REUSEADDR);',
+      '    int? ok_int = maybe_int();',
+      '    int*? bad_int = maybe_int();',
+      '    Foo? ok_foo = make_foo();',
+      '    Foo*? bad_foo = make_foo();',
+      '}',
+      '',
+    ].join('\n'),
+  );
+  const tcp = parseSource(
+    'file:///stdlib/std/net/tcp.c3',
+    [
+      'module std::net::tcp;',
+      'import std::net;',
+      'struct TcpServerSocket {}',
+      'fn TcpServerSocket? listen(String host, int port, int backlog, SocketOption options...);',
+      '',
+    ].join('\n'),
+    { sourceKind: 'stdlib' },
+  );
+  const net = parseSource(
+    'file:///stdlib/std/net.c3',
+    [
+      'module std::net;',
+      'enum SocketOption : int { REUSEADDR, REUSEPORT }',
+      '',
+    ].join('\n'),
+    { sourceKind: 'stdlib' },
+  );
+
+  index.upsert(app, false);
+  index.upsert(tcp, false);
+  index.upsert(net, false);
+  index.rebuild();
+
+  const diagnostics = semanticDiagnostics(index, app);
+  const messages = diagnostics.map((diagnostic) => diagnostic.message);
+
+  assert.equal(
+    messages.some((m) => m.includes("'ok_server'")),
+    false,
+    'TcpServerSocket? = tcp::listen() should not produce a diagnostic',
+  );
+  assert.equal(
+    messages.some((m) => m.includes("'ok_int'")),
+    false,
+    'int? = maybe_int() should not produce a diagnostic',
+  );
+  assert.equal(
+    messages.some((m) => m.includes("'ok_foo'")),
+    false,
+    'Foo? = make_foo() should not produce a diagnostic',
+  );
+
+  assert.equal(
+    messages.some((m) => m.includes("'bad_server'")),
+    true,
+    'TcpServerSocket*? = tcp::listen() should produce a diagnostic',
+  );
+  assert.equal(
+    messages.some((m) => m.includes("'bad_int'")),
+    true,
+    'int*? = maybe_int() should produce a diagnostic',
+  );
+  assert.equal(
+    messages.some((m) => m.includes("'bad_foo'")),
+    true,
+    'Foo*? = make_foo() should produce a diagnostic',
+  );
+});
+
+test('semanticDiagnostics reports inner type detail for optional pointer mismatches', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'fn int? maybe_int();',
+      'fn void? run() {',
+      '    int*? p = maybe_int();',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(
+    semanticDiagnostics(index, parsed).map((diagnostic) => diagnostic.message),
+    [
+      "Cannot initialize 'p' of type 'int*?' with 'int?': 'int' is not assignable to 'int*'",
+    ],
+  );
+});
+
+test('semanticDiagnostics detects shape mismatches for non-optional types', () => {
+  const index = new ProjectIndex();
+  const uri = 'file:///workspace/app.c3';
+  const parsed = parseSource(
+    uri,
+    [
+      'module app;',
+      'struct Foo {}',
+      'fn Foo make_foo() { return {}; }',
+      'fn void run() {',
+      '    Foo* p = make_foo();',
+      '}',
+      '',
+    ].join('\n'),
+  );
+
+  index.upsert(parsed);
+
+  assert.deepEqual(
+    semanticDiagnostics(index, parsed).map((diagnostic) => diagnostic.message),
+    ["Cannot initialize 'p' of type 'Foo*' with 'Foo'"],
   );
 });

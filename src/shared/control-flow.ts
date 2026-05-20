@@ -2,6 +2,7 @@ import type { SyntaxNode } from 'tree-sitter';
 
 export function nodeAlwaysReturns(node: SyntaxNode): boolean {
   if (node.type === 'return_stmt') return true;
+  if (node.type === 'implies_body') return true;
 
   if (isBlockNode(node)) {
     return blockAlwaysMatches(node, nodeAlwaysReturns);
@@ -26,6 +27,7 @@ export function nodeAlwaysReturns(node: SyntaxNode): boolean {
 export function nodeCannotCompleteNormally(node: SyntaxNode): boolean {
   if (
     node.type === 'return_stmt' ||
+    node.type === 'implies_body' ||
     node.type === 'break_stmt' ||
     node.type === 'continue_stmt'
   ) {

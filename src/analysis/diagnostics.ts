@@ -786,6 +786,8 @@ function pushReferenceDiagnostic(
   ref: SyntaxNode,
   diagnostics: Diagnostic[],
 ): void {
+  if (isCompileTimeContinueStatement(ref)) return;
+
   const result = index.resolveSymbol(
     parsed.uri,
     ref.text,
@@ -854,6 +856,18 @@ function isVariableReference(ref: SyntaxNode): boolean {
   return ref.type === 'ident_expr' && !isCallTargetReference(ref);
 }
 
+function isCompileTimeContinueStatement(ref: SyntaxNode): boolean {
+  if (ref.text !== '$continue') return false;
+
+  const statement = ref.parent;
+  if (statement?.type !== 'expr_stmt') return false;
+
+  const expression = statement.namedChildren[0];
+  if (!expression || !sameNode(expression, ref)) return false;
+
+  return !!ancestorOfType(statement, 'ct_foreach_stmt');
+}
+
 function isCallTargetReference(ref: SyntaxNode): boolean {
   if (isTrailingGenericArgument(ref)) return true;
 
@@ -916,6 +930,10 @@ function isCallFunctionNode(node: SyntaxNode): boolean {
   return !!functionNode && sameNode(functionNode, node);
 }
 
+function isAccessEvalSelector(field: SyntaxNode): boolean {
+  return field.type === 'access_eval' || !!directChildOfType(field, 'access_eval');
+}
+
 function trailingGenericExpressionNodes(root: SyntaxNode): SyntaxNode[] {
   const nodes: SyntaxNode[] = [];
 
@@ -974,7 +992,9 @@ function memberReferenceNodes(root: SyntaxNode): SyntaxNode[] {
 
     if (node.type === 'field_expr') {
       const field = node.childForFieldName('field');
-      if (field && !isFieldCallTarget(node)) refs.push(field);
+      if (field && !isFieldCallTarget(node) && !isAccessEvalSelector(field)) {
+        refs.push(field);
+      }
     }
 
     for (const child of node.namedChildren) {

@@ -39,7 +39,6 @@ export const C3_KEYWORDS = [
   'int128',
   'interface',
   'iptr',
-  'isz',
   'lengthof',
   'long',
   'macro',
